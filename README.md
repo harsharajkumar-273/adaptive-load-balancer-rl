@@ -66,7 +66,7 @@ $$x_{t,i} = \begin{bmatrix}
 1.0 & \text{(Bias/Baseline)} \\
 \text{CPU}_i / 100 & \text{(Normalized CPU Load)} \\
 \text{QueueDepth}_i / 20 & \text{(Normalized Queue Depth)} \\
-\text{P99\_Latency}_i / 200 & \text{(Normalized Recent SLA Latency)} \\
+\text{P99-Latency}_i / 200 & \text{(Normalized Recent SLA Latency)} \\
 \text{GlobalRate} / 150 & \text{(Normalized Traffic Volatility)} \\
 \frac{d}{dt}\text{Rate} / 50 & \text{(Traffic Volatility Trend)}
 \end{bmatrix}^T$$
@@ -90,7 +90,7 @@ where $\tau$ is the routing temperature (`RL_TEMPERATURE = 0.2`).
 
 ### 4. Reward Function
 Every 150ms, feedback is evaluated based on the performance of instances that handled requests:
-$$r_{t,i} = - \left( 1.0 \cdot \left(\frac{\text{P99}_i}{200}\right) + 5.0 \cdot \text{Error\_Rate}_i + 10.0 \cdot \text{SLA\_Breach\_Rate}_i \right)$$
+$$r_{t,i} = - \left( 1.0 \cdot \left(\frac{\text{P99}_i}{200}\right) + 5.0 \cdot \text{Error-Rate}_i + 10.0 \cdot \text{SLA-Breach-Rate}_i \right)$$
 *   *SLA Breach* is defined as request latency exceeding **200ms**.
 *   The reward is a negative penalty (higher is better, i.e., closer to 0).
 
