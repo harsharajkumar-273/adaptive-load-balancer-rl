@@ -1,13 +1,28 @@
 # src/config.py
 """
-Configuration parameters for the AI-Driven Asynchronous Load Balancer.
+Configuration parameters for the distributed systems-focused Load Balancer.
 """
+import os
 
 # General System Settings
 NUM_INSTANCES = 5
 PORT = 8000
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"  # Expose to allow external traffic
 CHECKPOINT_PATH = "model_checkpoint.npz"
+
+# Redis Shared Cache Settings
+REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+REDIS_DB = int(os.environ.get("REDIS_DB", 0))
+
+# Microservice Route Mappings (Resolves to local ports or Docker container hosts)
+BACKEND_URLS = [
+    os.environ.get("BACKEND_URL_1", "http://127.0.0.1:8001"),
+    os.environ.get("BACKEND_URL_2", "http://127.0.0.1:8002"),
+    os.environ.get("BACKEND_URL_3", "http://127.0.0.1:8003"),
+    os.environ.get("BACKEND_URL_4", "http://127.0.0.1:8004"),
+    os.environ.get("BACKEND_URL_5", "http://127.0.0.1:8005")
+]
 
 # SLA Thresholds
 SLA_LATENCY_MS = 200.0  # Hard SLA threshold in milliseconds
@@ -26,7 +41,7 @@ RL_REWARD_WEIGHTS = {
     "sla": 10.0                    # Penalty weight for fraction of SLA breaches (>200ms)
 }
 
-# Backend Instances Specifications
+# Backend Node Specifications (used for running microservices)
 BACKEND_SPECS = [
     {
         "id": 1,

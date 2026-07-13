@@ -1,0 +1,107 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Centralized Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: rl-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  # Backend Microservice Nodes (Ports 8001-8005)
+  node1:
+    build: .
+    container_name: rl-node-1
+    command: python src/backend_node.py --port 8001 --node-idx 0
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+
+  node2:
+    build: .
+    container_name: rl-node-2
+    command: python src/backend_node.py --port 8002 --node-idx 1
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+
+  node3:
+    build: .
+    container_name: rl-node-3
+    command: python src/backend_node.py --port 8003 --node-idx 2
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+
+  node4:
+    build: .
+    container_name: rl-node-4
+    command: python src/backend_node.py --port 8004 --node-idx 3
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+
+  node5:
+    build: .
+    container_name: rl-node-5
+    command: python src/backend_node.py --port 8005 --node-idx 4
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+
+  # API Gateway Proxy & RL Control Plane Orchestrator
+  gateway-orchestrator:
+    build: .
+    container_name: rl-gateway-orchestrator
+    command: python src/main.py
+    stdin_open: true  # Keep stdin open to enable TTY updates
+    tty: true         # Enable interactive TTY to render the ANSI terminal dashboard
+    environment:
+      - REDIS_HOST=redis
+      - RUNNING_IN_DOCKER=true
+      - BACKEND_URL_1=http://node1:8001
+      - BACKEND_URL_2=http://node2:8002
+      - BACKEND_URL_3=http://node3:8003
+      - BACKEND_URL_4=http://node4:8004
+      - BACKEND_URL_5=http://node5:8005
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      node1:
+        condition: service_started
+      node2:
+        condition: service_started
+      node3:
+        condition: service_started
+      node4:
+        condition: service_started
+      node5:
+        condition: service_started
