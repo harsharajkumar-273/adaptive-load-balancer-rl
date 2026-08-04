@@ -6,41 +6,49 @@
 [![Grafana](https://img.shields.io/badge/Grafana-Dashboard-orange.svg)](https://grafana.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://www.docker.com/)
 
-A portfolio-defining, enterprise-grade prototype of an **AI-Driven Asynchronous Load Balancer** implemented as a **distributed microservice cluster**. Features **multi-strategy routing baselines**, **Prometheus observability & Grafana dashboards**, **Redis Pub/Sub reactive streaming**, **Adaptive QoS Traffic Shaping**, **AI routing explainability**, and **chaos engineering fault injection**.
+A portfolio-defining, enterprise-grade prototype of an **AI-Driven Asynchronous Load Balancer** implemented as a **distributed microservice cluster**. Features **Multi-Strategy Routing Baselines**, **Kubernetes HPA Auto-Scaling**, **Dynamic Service Discovery**, **Multi-Region Geo-Routing**, **Prometheus & Grafana Observability**, **Redis Pub/Sub Event Streaming**, **Adaptive QoS Traffic Shaping**, **AI Decision Explainability**, and **Chaos Engineering Fault Injection**.
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Complete System Architecture
 
 ```mermaid
 graph TD
     Client[Traffic Generator / Load Tester] -->|HTTP:8000/auth, /play-video, /analytics| Gateway[API Gateway Proxy]
-    Gateway -->|1. Fetch Weights & Telemetry| Redis[(Redis State Store)]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node1[Backend Node 1 - Port 8001]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node2[Backend Node 2 - Port 8002]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node5[Backend Node 5 - Port 8005]
+    Gateway -->|1. Fetch Weights & Service Discovery| Registry[Service Registry / Redis]
+    Gateway -->|2. Geo-Route (X-Client-Region)| Node1[Backend Node 1 - Port 8001]
+    Gateway -->|2. Geo-Route (X-Client-Region)| Node2[Backend Node 2 - Port 8002]
+    Gateway -->|2. Geo-Route (X-Client-Region)| NodeN[Autoscaled Node N - Port 8006+]
     
-    Node1 -->|Heartbeat & CPU Metrics| Redis
+    HPA[HPA Cluster AutoScaler Engine] -->|Monitors CPU > 75% -> Spawns Nodes| NodeN
+    
+    Node1 -->|Heartbeat & CPU Metrics| Redis[(Redis State Store)]
     Node2 -->|Heartbeat & CPU Metrics| Redis
-    Node5 -->|Heartbeat & CPU Metrics| Redis
+    NodeN -->|Heartbeat & CPU Metrics| Redis
     
-    Gateway -->|3. Publish Outcome Stream (events:outcomes)| PubSub[Redis Pub/Sub Channel]
+    Gateway -->|3. Publish Outcome Stream| PubSub[Redis Pub/Sub Channel]
     PubSub -->|4. Reactive Event Listener| Agent[RL Control Agent Process]
     Agent -->|5. Push new weights| Redis
     
     Gateway -->|GET /metrics| Prom[Prometheus / Grafana]
 ```
 
-1.  **API Gateway Proxy (Port 8000)**: Evaluates routing strategies in **< 0.1ms**, checks safety guardrails, enforces **Adaptive QoS Traffic Shaping**, and publishes outcome events to Redis Pub/Sub.
-2.  **Adaptive QoS Traffic Shaping**:
-    *   `GET /auth` & `GET /checkout`: **High Priority** (SLA protected).
-    *   `GET /play-video`: **Medium Priority**.
-    *   `GET /analytics` & `GET /logs`: **Low Priority** (Shed via `HTTP 429` under average cluster CPU > 80%).
-3.  **Event-Driven Reactive Streaming (Redis Pub/Sub)**: Eliminates polling delays! Requests publish outcome events to `events:request_outcomes`. The RL Agent listens reactively to update parameters on-the-fly.
-4.  **Prometheus & Grafana Observability**: Exposes standard `/metrics` exposition format. Includes pre-configured `grafana_dashboard.json`.
-5.  **Multi-Strategy Routing Engine**: 5 swappable load balancing algorithms (`lin_ts`, `least_conn`, `p2c`, `round_robin`, `weighted_round_robin`).
-6.  **AI Routing Explainability (`GET /explain-routing`)**: Audit API detailing candidate evaluations, CPU/queue features, expected rewards, and action mask states.
-7.  **Chaos Engineering Engine (`POST /chaos/inject`)**: Injects CPU spikes (99%), extra latency delays, or HTTP 500 error spikes.
+---
+
+## 🔥 Comprehensive 10/10 Engineering Capabilities
+
+| Feature | Architectural Component | Description |
+|:---|:---|:---|
+| **1. Multi-Strategy Baselines** | `src/routing_strategies.py` | 5 swappable algorithms (`lin_ts`, `least_conn`, `p2c`, `round_robin`, `weighted_round_robin`). |
+| **2. Cluster Auto-Scaling** | `src/autoscaler.py` | Kubernetes HPA simulation scaling cluster capacity from 5 to 10 nodes under CPU > 75%. |
+| **3. Service Discovery** | `src/registry.py` | Dynamic registration (`/registry/register`) allowing nodes to join or leave on the fly. |
+| **4. Multi-Region Geo-Routing**| `src/gateway.py` | Region-aware routing (`X-Client-Region`) computing cross-region network latency penalties. |
+| **5. Prometheus & Grafana** | `src/metrics.py` | Exposes standard `/metrics` exposition format with pre-configured `grafana_dashboard.json`. |
+| **6. Redis Pub/Sub Streaming** | `src/shared_state.py` | Event-driven reactive streaming replacing 150ms polling loops. |
+| **7. Adaptive QoS Shaping** | `src/gateway.py` | Classifies traffic into High (`/auth`), Medium (`/play-video`), and Low (`/analytics`) tiers, shedding low priority requests under heavy load. |
+| **8. AI Decision Explainability**| `GET /explain-routing` | Audit API & `X-Decision-Reason` header explaining candidate scores, features, and action masks. |
+| **9. Chaos Engineering** | `src/chaos.py` | Injects 99% CPU spikes, artificial latency delays, or HTTP 500 error spikes (`/chaos/inject`). |
+| **10. Dynamic Configuration** | `config.yaml` | Centralized YAML settings for algorithms, node specs, SLA limits, and Redis parameters. |
 
 ---
 
@@ -59,24 +67,7 @@ graph TD
 
 ---
 
-## ⚙️ Prometheus & Grafana Configuration
-
-### Prometheus Scraping Target
-Exposed on `http://127.0.0.1:8000/metrics`
-```yaml
-scrape_configs:
-  - job_name: 'netflix_rl_load_balancer'
-    scrape_interval: 1s
-    static_configs:
-      - targets: ['localhost:8000']
-```
-
-### Import Grafana Dashboard
-Import `grafana_dashboard.json` directly into Grafana to visualize live P50/P95/P99 latency histograms, active routing weights, node CPU/queue depths, circuit breaker states, and QoS shedding counters!
-
----
-
-## 🚀 Execution & Testing
+## ⚙️ Execution & Verification
 
 ### 1. Run Cluster Locally
 ```bash
@@ -94,11 +85,14 @@ source venv/bin/activate
 PYTHONPATH=. pytest -v
 ```
 
-### 4. Test QoS Traffic Shedding
+### 4. Service Discovery & Geo-Routing API Calls
 ```bash
-# High Priority - Guaranteed SLA
-curl http://127.0.0.1:8000/auth
+# Check registered active nodes
+curl http://127.0.0.1:8000/registry/instances
 
-# Low Priority - Sheds via HTTP 429 under CPU > 80%
-curl http://127.0.0.1:8000/analytics
+# Send request with Client Region header
+curl -H "X-Client-Region: eu-west" http://127.0.0.1:8000/play-video
+
+# Check AI Routing Explainability audit
+curl http://127.0.0.1:8000/explain-routing
 ```

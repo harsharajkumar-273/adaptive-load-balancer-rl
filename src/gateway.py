@@ -1,15 +1,16 @@
 # src/gateway.py
 """
 Data Plane API Gateway acting as a high-performance HTTP reverse proxy
-with Multi-Strategy Routing, Adaptive Traffic Shaping (QoS Load Shedding),
+with Multi-Strategy Routing, Multi-Region Geo-Routing (X-Client-Region),
+Dynamic Service Discovery (/registry), Adaptive QoS Traffic Shaping,
 Prometheus Metrics Exposition (/metrics), AI Explainability (/explain-routing),
 Chaos Injection, Action Masking, and Circuit Breaking.
 """
 import time
 import random
 import httpx
-from typing import Dict
-from fastapi import FastAPI, Request, Response, HTTPException, status, Body, Query
+from typing import Dict, List, Any
+from fastapi import FastAPI, Request, Response, HTTPException, status, Body, Query, Header
 from src.config import (
     STALENESS_THRESHOLD_SEC,
     BACKEND_URLS,
@@ -20,21 +21,34 @@ from src.config import (
 )
 from src.shared_state import DistributedStateCache
 from src.routing_strategies import RoutingEngine
+from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
 from src.metrics import generate_prometheus_metrics
 
 app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway")
 
-# Track QoS load shedding counters
 qos_shed_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+
+# Cross-region network latency matrix penalty (ms)
+REGION_LATENCY_PENALTY = {
+    ("us-east", "us-east"): 0.0,
+    ("us-east", "us-west"): 35.0,
+    ("us-east", "eu-west"): 75.0,
+    ("us-east", "ap-south"): 180.0,
+    ("us-west", "us-west"): 0.0,
+    ("us-west", "us-east"): 35.0,
+    ("us-west", "eu-west"): 110.0,
+    ("us-west", "ap-south"): 140.0,
+}
 
 @app.on_event("startup")
 async def startup_event():
-    """Initializes connection-pooled async HTTP client & routing engine."""
-    limits = httpx.Limits(max_keepalive_connections=200, max_connections=500)
+    """Initializes connection-pooled async HTTP client, routing engine & service registry."""
+    limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000)
     app.state.client = httpx.AsyncClient(timeout=4.0, limits=limits)
     app.state.shared_cache = DistributedStateCache(num_instances=NUM_INSTANCES)
     app.state.routing_engine = RoutingEngine(num_instances=NUM_INSTANCES)
+    app.state.registry = ServiceRegistry(app.state.shared_cache)
     app.state.current_strategy = ROUTING_STRATEGY
 
 @app.on_event("shutdown")
@@ -42,8 +56,14 @@ async def shutdown_event():
     """Closes HTTP client connections on exit."""
     await app.state.client.aclose()
 
-async def forward_proxy_request(request: Request, response: Response, priority: str = "medium", strategy: str = None):
-    """Core HTTP reverse proxy logic with QoS Traffic Shaping & Action Masking."""
+async def forward_proxy_request(
+    request: Request,
+    response: Response,
+    priority: str = "medium",
+    strategy: str = None,
+    client_region: str = "us-east"
+):
+    """Core HTTP reverse proxy logic with Geo-Routing & QoS Traffic Shaping."""
     shared_cache = request.app.state.shared_cache
     http_client = request.app.state.client
     routing_engine = request.app.state.routing_engine
@@ -51,13 +71,12 @@ async def forward_proxy_request(request: Request, response: Response, priority: 
     active_strategy = strategy.lower() if strategy else request.app.state.current_strategy
     current_time = time.time()
     
-    # 1. Fetch latest weights and metrics from Redis
     weights, last_update = shared_cache.get_routing_weights()
     metrics = shared_cache.get_instance_metrics()
     cpu_list = metrics["cpu"]
     queue_list = metrics["queue"]
     
-    # 2. Adaptive Traffic Shaping (QoS Load Shedding under heavy cluster load)
+    # Adaptive Traffic Shaping (QoS Load Shedding under heavy cluster load)
     avg_cpu = sum(cpu_list) / max(1, len(cpu_list))
     if avg_cpu > 80.0 and priority == "low":
         qos_shed_counts["low"] += 1
@@ -68,7 +87,7 @@ async def forward_proxy_request(request: Request, response: Response, priority: 
             "message": f"QoS Load Shedding active (Average Cluster CPU {avg_cpu:.1f}% > 80%). Low priority request shed to protect SLA."
         }
 
-    # 3. Safety Guardrail: Circuit Breaker for Stale Cache
+    # Safety Guardrail: Circuit Breaker for Stale Cache
     is_stale = (current_time - last_update) > STALENESS_THRESHOLD_SEC
     
     if is_stale and active_strategy == "lin_ts":
@@ -79,33 +98,37 @@ async def forward_proxy_request(request: Request, response: Response, priority: 
         shared_cache.set_circuit_breaker(False)
         chosen_idx, routing_mode, effective_weights = routing_engine.select_instance(active_strategy, weights, cpu_list, queue_list)
 
-    # 4. Proxy the HTTP request to the selected microservice node
+    # Calculate Geo-routing latency penalty
+    node_region = "us-east" if chosen_idx % 2 == 0 else "us-west"
+    geo_penalty = REGION_LATENCY_PENALTY.get((client_region.lower(), node_region), 40.0)
+
+    # Proxy request
     target_url = f"{BACKEND_URLS[chosen_idx]}/work"
     start_time = time.time()
-    success = False
     
     try:
         proxy_resp = await http_client.get(target_url)
-        latency_ms = (time.time() - start_time) * 1000.0
+        latency_ms = ((time.time() - start_time) * 1000.0) + geo_penalty
         success = (proxy_resp.status_code == status.HTTP_200_OK)
         
-        # Write audit headers & X-Decision-Reason
-        reason = f"Strategy={routing_mode}; Target=Node-{chosen_idx + 1}; Priority={priority.upper()}; CPU={cpu_list[chosen_idx]:.1f}%; Weight={effective_weights[chosen_idx]*100:.1f}%"
+        reason = f"Strategy={routing_mode}; Target=Node-{chosen_idx + 1}; ClientRegion={client_region.upper()}; NodeRegion={node_region.upper()}; GeoPenalty={geo_penalty:.0f}ms; CPU={cpu_list[chosen_idx]:.1f}%"
         response.headers["X-Routed-To"] = f"Node-{chosen_idx + 1}"
         response.headers["X-Routing-Mode"] = routing_mode
+        response.headers["X-Client-Region"] = client_region
         response.headers["X-Decision-Reason"] = reason
         response.headers["X-Proxy-Latency"] = f"{latency_ms:.2f} ms"
         
         response.status_code = proxy_resp.status_code
         
-        # Record outcome in Redis (triggers Event-Driven Pub/Sub stream)
         breached_sla = latency_ms > SLA_LATENCY_MS
         shared_cache.record_request_outcome(chosen_idx, latency_ms, success, breached_sla)
         
-        return proxy_resp.json()
+        res_data = proxy_resp.json()
+        res_data["geo_penalty_ms"] = geo_penalty
+        return res_data
         
     except httpx.RequestError:
-        latency_ms = (time.time() - start_time) * 1000.0
+        latency_ms = ((time.time() - start_time) * 1000.0) + geo_penalty
         shared_cache.record_request_outcome(chosen_idx, latency_ms, False, True)
         
         raise HTTPException(
@@ -113,31 +136,66 @@ async def forward_proxy_request(request: Request, response: Response, priority: 
             detail=f"Connection failed proxying to Backend Node {chosen_idx + 1}"
         )
 
-# Route Endpoints with QoS Tiers
+# Route Endpoints with Geo-Routing & QoS Tiers
 @app.get("/auth")
 @app.get("/checkout")
-async def high_priority_endpoint(request: Request, response: Response, strategy: str = None):
-    """High Priority Endpoint (SLA protected)."""
-    return await forward_proxy_request(request, response, priority="high", strategy=strategy)
+async def high_priority_endpoint(
+    request: Request,
+    response: Response,
+    strategy: str = None,
+    x_client_region: str = Header("us-east", alias="X-Client-Region")
+):
+    return await forward_proxy_request(request, response, priority="high", strategy=strategy, client_region=x_client_region)
 
 @app.get("/play-video")
-async def medium_priority_endpoint(request: Request, response: Response, strategy: str = None):
-    """Medium Priority Endpoint."""
-    return await forward_proxy_request(request, response, priority="medium", strategy=strategy)
+async def medium_priority_endpoint(
+    request: Request,
+    response: Response,
+    strategy: str = None,
+    x_client_region: str = Header("us-east", alias="X-Client-Region")
+):
+    return await forward_proxy_request(request, response, priority="medium", strategy=strategy, client_region=x_client_region)
 
 @app.get("/analytics")
 @app.get("/logs")
-async def low_priority_endpoint(request: Request, response: Response, strategy: str = None):
-    """Low Priority Endpoint (Subject to QoS load shedding under CPU > 80%)."""
-    return await forward_proxy_request(request, response, priority="low", strategy=strategy)
+async def low_priority_endpoint(
+    request: Request,
+    response: Response,
+    strategy: str = None,
+    x_client_region: str = Header("us-east", alias="X-Client-Region")
+):
+    return await forward_proxy_request(request, response, priority="low", strategy=strategy, client_region=x_client_region)
+
+# Service Registry Endpoints
+@app.get("/registry/instances")
+async def get_registered_instances(request: Request):
+    """Exposes all registered healthy cluster nodes."""
+    return {"active_instances": request.app.state.registry.get_active_instances()}
+
+@app.post("/registry/register")
+async def register_instance(
+    request: Request,
+    node_idx: int = Body(..., embed=True),
+    name: str = Body(..., embed=True),
+    host: str = Body("127.0.0.1", embed=True),
+    port: int = Body(..., embed=True),
+    region: str = Body("us-east", embed=True)
+):
+    """Dynamically registers a new microservice node in the cluster."""
+    registry = request.app.state.registry
+    info = registry.register_instance(node_idx=node_idx, name=name, host=host, port=port, region=region)
+    return {"status": "registered", "instance": info}
+
+@app.post("/registry/deregister")
+async def deregister_instance(request: Request, node_idx: int = Body(..., embed=True)):
+    """Deregisters a microservice node from the cluster."""
+    registry = request.app.state.registry
+    success = registry.deregister_instance(node_idx)
+    return {"status": "deregistered" if success else "not_found", "node_idx": node_idx}
 
 @app.get("/explain-routing")
 async def explain_routing(request: Request):
-    """
-    AI & Routing Explainability Audit Endpoint.
-    Provides detailed audit trail explaining why backends are selected, expected rewards,
-    candidate evaluations, feature values, and action mask states.
-    """
+    """AI & Routing Explainability Audit Endpoint."""
     shared_cache = request.app.state.shared_cache
     weights, last_update = shared_cache.get_routing_weights()
     metrics = shared_cache.get_instance_metrics()
@@ -159,7 +217,7 @@ async def explain_routing(request: Request):
         
         candidates.append({
             "node": f"Node-{i+1}",
-            "name": BACKEND_SPECS[i]["name"],
+            "name": BACKEND_SPECS[i]["name"] if i < len(BACKEND_SPECS) else f"Autoscaled-Node-{i+1}",
             "rl_weight": round(weight, 4),
             "rl_weight_percentage": f"{weight*100:.1f}%",
             "cpu_load": f"{cpu:.1f}%",
@@ -171,23 +229,7 @@ async def explain_routing(request: Request):
     return {
         "active_strategy": request.app.state.current_strategy,
         "circuit_breaker_tripped": telemetry.get("circuit_breaker_tripped", False),
-        "cache_last_updated_sec_ago": round(time.time() - last_update, 3),
-        "global_traffic": {
-            "current_rps": round(telemetry.get("global_request_rate", 0.0), 1),
-            "spike_active": telemetry.get("traffic_spike_active", False)
-        },
-        "qos_traffic_shaping": {
-            "load_shedding_active": sum(cpu_list) / max(1, len(cpu_list)) > 80.0,
-            "low_priority_shed_count": qos_shed_counts["low"]
-        },
-        "features_evaluated": [
-            "Bias (1.0)",
-            "Normalized CPU (CPU/100)",
-            "Normalized Queue Depth (Queue/20)",
-            "Normalized P99 Latency (P99/200)",
-            "Global Traffic Rate (Rate/150)",
-            "Traffic Rate Trend (d/dt / 50)"
-        ],
+        "registered_instances_count": len(request.app.state.registry.get_active_instances()),
         "candidate_evaluations": candidates
     }
 
