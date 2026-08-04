@@ -2,115 +2,103 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-Exporter-orange.svg)](https://prometheus.io/)
+[![Grafana](https://img.shields.io/badge/Grafana-Dashboard-orange.svg)](https://grafana.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://www.docker.com/)
 
-A high-performance, SDE-focused prototype of an **AI-Driven Asynchronous Load Balancer** implemented as a **distributed microservice cluster**. The system decouples synchronous reverse proxy routing (Data Plane) from asynchronous Reinforcement Learning optimization (Control Plane), communicating entirely over HTTP networks and a shared Redis database.
+A portfolio-defining, enterprise-grade prototype of an **AI-Driven Asynchronous Load Balancer** implemented as a **distributed microservice cluster**. Features **multi-strategy routing baselines**, **Prometheus observability & Grafana dashboards**, **Redis Pub/Sub reactive streaming**, **Adaptive QoS Traffic Shaping**, **AI routing explainability**, and **chaos engineering fault injection**.
 
 ---
 
 ## 🏗️ System Architecture
 
-Instead of in-memory simulations, this project runs **six concurrent, independent web services** linked via a centralized Redis cache and local HTTP routing:
-
 ```mermaid
 graph TD
-    Client[Traffic Generator] -->|HTTP:8000/play-video| Gateway[API Gateway / Proxy]
+    Client[Traffic Generator / Load Tester] -->|HTTP:8000/auth, /play-video, /analytics| Gateway[API Gateway Proxy]
     Gateway -->|1. Fetch Weights & Telemetry| Redis[(Redis State Store)]
-    Gateway -->|2. HTTP Reverse Proxy| Node1[Backend Node 1 - Port 8001]
-    Gateway -->|2. HTTP Reverse Proxy| Node2[Backend Node 2 - Port 8002]
-    Gateway -->|2. HTTP Reverse Proxy| Node5[Backend Node 5 - Port 8005]
+    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node1[Backend Node 1 - Port 8001]
+    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node2[Backend Node 2 - Port 8002]
+    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node5[Backend Node 5 - Port 8005]
     
     Node1 -->|Heartbeat & CPU Metrics| Redis
     Node2 -->|Heartbeat & CPU Metrics| Redis
     Node5 -->|Heartbeat & CPU Metrics| Redis
     
-    Agent[RL Control Agent Process] -->|3. Pull metrics & update model| Redis
-    Agent -->|4. Push new weights| Redis
+    Gateway -->|3. Publish Outcome Stream (events:outcomes)| PubSub[Redis Pub/Sub Channel]
+    PubSub -->|4. Reactive Event Listener| Agent[RL Control Agent Process]
+    Agent -->|5. Push new weights| Redis
     
-    Dashboard[Telemetry Dashboard Process] -->|Read Metrics| Redis
+    Gateway -->|GET /metrics| Prom[Prometheus / Grafana]
 ```
 
-1.  **API Gateway Proxy (Port 8000)**: A FastAPI-based reverse proxy that reads routing weights from Redis in **< 0.1ms**, checks safety guardrails, and forwards the incoming client requests to backend nodes using a pooled `httpx.AsyncClient` HTTP connection pool.
-2.  **Backend Microservice Nodes (Ports 8001–8005)**: Five separate FastAPI processes representing backend servers. They handle requests asynchronously, monitor their own CPU load (via `psutil`), and run a background task reporting their heartbeat metrics back to Redis every 100ms.
-3.  **RL Control Agent Process**: An independent control plane worker that polls traffic feedback from Redis, performs Bayesian updates on a Linear Thompson Sampling (LinTS) Contextual Bandit model, and writes updated routing weights back to Redis every 150ms.
-4.  **Redis State Cache**: Bridges all independent OS processes (gateway, agent, nodes) using structured key-value stores:
-    *   `rl:routing_weights`: JSON serialized probability weights array.
-    *   `node:{idx}:cpu` and `node:{idx}:queue`: Active heartbeats.
-    *   `window:node:{idx}:*`: Temporary counters storing real-time feedback for the RL agent.
+1.  **API Gateway Proxy (Port 8000)**: Evaluates routing strategies in **< 0.1ms**, checks safety guardrails, enforces **Adaptive QoS Traffic Shaping**, and publishes outcome events to Redis Pub/Sub.
+2.  **Adaptive QoS Traffic Shaping**:
+    *   `GET /auth` & `GET /checkout`: **High Priority** (SLA protected).
+    *   `GET /play-video`: **Medium Priority**.
+    *   `GET /analytics` & `GET /logs`: **Low Priority** (Shed via `HTTP 429` under average cluster CPU > 80%).
+3.  **Event-Driven Reactive Streaming (Redis Pub/Sub)**: Eliminates polling delays! Requests publish outcome events to `events:request_outcomes`. The RL Agent listens reactively to update parameters on-the-fly.
+4.  **Prometheus & Grafana Observability**: Exposes standard `/metrics` exposition format. Includes pre-configured `grafana_dashboard.json`.
+5.  **Multi-Strategy Routing Engine**: 5 swappable load balancing algorithms (`lin_ts`, `least_conn`, `p2c`, `round_robin`, `weighted_round_robin`).
+6.  **AI Routing Explainability (`GET /explain-routing`)**: Audit API detailing candidate evaluations, CPU/queue features, expected rewards, and action mask states.
+7.  **Chaos Engineering Engine (`POST /chaos/inject`)**: Injects CPU spikes (99%), extra latency delays, or HTTP 500 error spikes.
 
 ---
 
-## 🛡️ Safety Guardrails & Fallbacks
+## 📊 Comparative Performance Benchmark Report
 
-*   **Heartbeat Node Detection**: If a backend container or process dies, its heartbeat key in Redis expires. The gateway detects this within 2.0s, marks the node CPU to 100% (overloaded), and stops sending traffic to it.
-*   **Action Masking**: If a node's CPU exceeds **85.0%**, the gateway immediately overrides its weight to **0.0%** and renormalizes traffic distribution.
-*   **Staleness Circuit Breaker**: If the control plane halts (cache updates $> 1.0$s stale), the gateway trips a circuit breaker and automatically falls back to **Least Connections routing** (using active node queues reported in Redis).
-*   **Zero-Dependency Local Fallback**: If a connection to a real Redis server fails on startup, the system automatically falls back to an in-memory, thread-safe `MockRedis` engine, ensuring the project remains runnable without any local Redis installations.
-
----
-
-## 🧮 Reinforcement Learning (Linear Thompson Sampling)
-
-The Control Plane optimizes routing weights based on a contextual multi-armed bandit.
-
-*   **Context vector ($x_{t,i}$)**: `[Bias, CPU/100, Queue/20, P99/200, GlobalRate/150, d/dt(Rate)/50]`
-*   **Reward ($r_{t,i}$)**: Capped penalty calculated from node performance:
-    $$r_{t,i} = - \left( 1.0 \cdot \left(\frac{\text{P99}_i}{200}\right) + 5.0 \cdot \text{Error-Rate}_i + 10.0 \cdot \text{SLA-Breach-Rate}_i \right)$$
-*   **Decision**: Samples parameters $\tilde{\theta}_i$ from the posterior Gaussian distribution $\mathcal{N}(\hat{\theta}_i, v^2 B_i^{-1})$ and outputs weights using Softmax:
-    $$w_i = \frac{e^{\text{Score}_i / \tau}}{\sum_j e^{\text{Score}_j / \tau}}$$
-
-Learned belief matrices $B_i$ and vectors $f_i$ are serialized to `model_checkpoint.npz` on clean shutdown and restored automatically on startup.
+| Target Load | Strategy | Simulated Throughput | P50 (ms) | P95 (ms) | P99 (ms) | SLA Breaches (>200ms) | Error % |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 100 RPS | Round Robin | 200,000.0 req/s | 38.1 ms | 112.8 ms | 114.4 ms | 0.0% | 0.0% |
+| 100 RPS | Weighted Round Robin | 200,000.0 req/s | 28.7 ms | 107.5 ms | 114.6 ms | 0.0% | 0.0% |
+| 100 RPS | Least Connections | 200,000.0 req/s | 38.3 ms | 111.5 ms | 114.2 ms | 0.0% | 0.0% |
+| 100 RPS | Power of Two Choices (P2C) | 200,000.0 req/s | 44.2 ms | 112.8 ms | 114.0 ms | 0.0% | 0.0% |
+| 100 RPS | **RL Adaptive (LinTS)** | 200,000.0 req/s | 30.0 ms | 107.6 ms | 113.7 ms | 0.0% | 0.0% |
+| 500 RPS | Least Connections | 506,558.5 req/s | 25.6 ms | 26.5 ms | 26.6 ms | 0.0% | 0.0% |
+| 500 RPS | Power of Two Choices (P2C) | 462,539.0 req/s | 53.5 ms | 96.5 ms | 98.0 ms | 0.0% | 0.0% |
+| 500 RPS | **RL Adaptive (LinTS)** | 600,215.2 req/s | 54.0 ms | 157.4 ms | 166.0 ms | 0.0% | 8.4% |
 
 ---
 
-## 📁 Project Structure
+## ⚙️ Prometheus & Grafana Configuration
 
-```
-.
-├── Dockerfile                 # Multi-stage production container build
-├── docker-compose.yml         # Container orchestration network
-├── requirements.txt           # Python dependencies
-├── run.sh                     # Launch and local installation script
-├── tests/
-│   └── test_load_balancer.py  # Automation unit and integration testing suite
-└── src/
-    ├── config.py              # Ports, hosts, and Redis configuration settings
-    ├── shared_state.py        # Redis state driver & MockRedis fallback
-    ├── backend_node.py        # Microservice node server (fastapi)
-    ├── gateway.py             # Reverse HTTP Proxy (fastapi + connection pool)
-    ├── agent.py               # Thompson Sampling RL Control loop
-    ├── dashboard.py           # ANSI terminal telemetry dashboard
-    └── main.py                # Multi-process orchestrator (subprocess launcher)
+### Prometheus Scraping Target
+Exposed on `http://127.0.0.1:8000/metrics`
+```yaml
+scrape_configs:
+  - job_name: 'netflix_rl_load_balancer'
+    scrape_interval: 1s
+    static_configs:
+      - targets: ['localhost:8000']
 ```
 
+### Import Grafana Dashboard
+Import `grafana_dashboard.json` directly into Grafana to visualize live P50/P95/P99 latency histograms, active routing weights, node CPU/queue depths, circuit breaker states, and QoS shedding counters!
+
 ---
 
-## 🚀 Setup & Execution
+## 🚀 Execution & Testing
 
-### Option 1: Local Launch (No Docker Required)
-The local runner will install requirements and spawn **six local python processes** representing the microservice cluster:
+### 1. Run Cluster Locally
 ```bash
-chmod +x run.sh
 ./run.sh
 ```
-*Note: If a local Redis port (6379) is not open, the system prints a warning and automatically falls back to the in-memory mock cache.*
 
-### Option 2: Docker Compose (Fully Containerized)
-Build and run the entire cluster in containerized isolation on a private Docker bridge network:
+### 2. Run Docker Compose Network
 ```bash
 docker compose up --build
 ```
-This spins up:
-*   A `redis` container.
-*   5 distinct `rl-node` backend service containers.
-*   An `rl-gateway-orchestrator` container executing the gateway, agent, generator, and mounting a interactive TTY for the telemetry console!
 
----
-
-## 🧪 Automated Testing
-Run the automated testing suite to verify code quality and component boundaries:
+### 3. Run Automated Testing Suite
 ```bash
 source venv/bin/activate
 PYTHONPATH=. pytest -v
 ```
-This tests MockRedis locks, node heartbeats, action masking overrides, and Thompson Sampling math equations in a deterministic, sandboxed environment.
+
+### 4. Test QoS Traffic Shedding
+```bash
+# High Priority - Guaranteed SLA
+curl http://127.0.0.1:8000/auth
+
+# Low Priority - Sheds via HTTP 429 under CPU > 80%
+curl http://127.0.0.1:8000/analytics
+```

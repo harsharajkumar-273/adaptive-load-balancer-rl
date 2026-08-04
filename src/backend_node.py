@@ -2,6 +2,7 @@
 """
 Standalone Backend Microservice representing a cluster node.
 Each node runs on a distinct port and registers its health/telemetry to Redis.
+Includes support for Chaos Engineering fault injection.
 """
 import sys
 import os
@@ -11,15 +12,16 @@ import math
 import random
 import time
 import uvicorn
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Response, status, Body
 
 # Ensure parent directory is on sys.path for absolute imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import BACKEND_SPECS
 from src.shared_state import DistributedStateCache
+from src.chaos import chaos_manager
 
-app = FastAPI()
+app = FastAPI(title="Backend Cluster Microservice Node")
 
 # Global state for the running node
 node_idx: int = 0
@@ -30,8 +32,15 @@ cache: DistributedStateCache = None
 lock = asyncio.Lock()
 
 def calculate_cpu():
-    """Simulates CPU utilization based on active connection depth."""
-    global cpu_utilization, active_connections, spec
+    """Simulates CPU utilization based on active connection depth & chaos injection."""
+    global cpu_utilization, active_connections, spec, node_idx
+    
+    # Check for Chaos Fault Injection
+    fault = chaos_manager.get_fault(node_idx)
+    if fault and fault.get("forced_cpu") is not None:
+        cpu_utilization = fault["forced_cpu"]
+        return cpu_utilization
+
     capacity = spec["capacity"]
     multiplier = spec["cpu_multiplier"]
     
@@ -43,8 +52,8 @@ def calculate_cpu():
     return cpu_utilization
 
 def calculate_latency(cpu: float) -> float:
-    """Computes response latency based on queue size and CPU stress."""
-    global active_connections, spec
+    """Computes response latency based on queue size, CPU stress, & chaos injection."""
+    global active_connections, spec, node_idx
     base = spec["base_latency_ms"]
     jitter = random.uniform(spec["jitter_range_ms"][0], spec["jitter_range_ms"][1])
     
@@ -56,11 +65,21 @@ def calculate_latency(cpu: float) -> float:
     if cpu > 70.0:
         cpu_impact = math.exp((cpu - 70.0) / 7.0) * 8.0
         
-    return base + queue_impact + cpu_impact + jitter
+    extra_delay = 0.0
+    fault = chaos_manager.get_fault(node_idx)
+    if fault and "extra_latency_ms" in fault:
+        extra_delay = fault["extra_latency_ms"]
+
+    return base + queue_impact + cpu_impact + jitter + extra_delay
 
 def check_success(cpu: float) -> bool:
-    """Evaluates HTTP error rates if CPU exceeds node safety threshold."""
-    global spec
+    """Evaluates HTTP error rates if CPU exceeds node threshold or under chaos."""
+    global spec, node_idx
+    fault = chaos_manager.get_fault(node_idx)
+    if fault and fault.get("error_rate", 0.0) > 0.0:
+        if random.random() < fault["error_rate"]:
+            return False
+
     threshold = spec["error_threshold_cpu"]
     if cpu <= threshold:
         return True
@@ -101,7 +120,7 @@ async def do_work(response: Response):
         
     if not success:
         response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-        return {"status": "error", "message": f"Node {node_idx + 1} overloaded"}
+        return {"status": "error", "message": f"Node {node_idx + 1} overloaded / chaos injected"}
         
     return {
         "status": "success",
@@ -111,10 +130,28 @@ async def do_work(response: Response):
         "active_connections": active_connections
     }
 
+@app.post("/chaos/inject")
+async def inject_chaos(
+    fault_type: str = Body("cpu_spike", embed=True),
+    extra_latency_ms: float = Body(300.0, embed=True)
+):
+    """Chaos engineering fault injection endpoint."""
+    global node_idx
+    if fault_type == "clear":
+        chaos_manager.clear_fault(node_idx)
+        return {"status": "cleared", "node_idx": node_idx}
+
+    chaos_manager.inject_fault(node_idx, fault_type=fault_type, extra_latency_ms=extra_latency_ms)
+    return {
+        "status": "injected",
+        "node_idx": node_idx,
+        "fault_type": fault_type,
+        "extra_latency_ms": extra_latency_ms
+    }
+
 async def heartbeat_loop():
     """Background task to report node statistics to Redis periodically."""
     global node_idx, cache, active_connections
-    # Wait for startup
     await asyncio.sleep(1.0)
     while True:
         try:
@@ -123,11 +160,10 @@ async def heartbeat_loop():
                 cache.record_node_heartbeat(node_idx, cpu, active_connections)
         except Exception:
             pass
-        await asyncio.sleep(0.1)  # Heartbeat every 100ms
+        await asyncio.sleep(0.1)
 
 @app.on_event("startup")
 async def startup_event():
-    """Starts the background heartbeat registration loop."""
     asyncio.create_task(heartbeat_loop())
 
 if __name__ == "__main__":

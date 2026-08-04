@@ -5,6 +5,10 @@ Spawns backend microservices in subprocesses and manages their lifecycles.
 """
 import sys
 import os
+
+# Ensure parent directory is on sys.path to allow absolute imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 import subprocess
 import time
@@ -14,9 +18,6 @@ from src.shared_state import DistributedStateCache
 from src.simulator import TrafficGenerator
 from src.agent import ContextualBanditAgent
 from src.dashboard import TelemetryDashboard
-
-# Ensure parent directory is on sys.path to allow absolute imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 async def run_circuit_breaker_demo(agent: ContextualBanditAgent):
     """

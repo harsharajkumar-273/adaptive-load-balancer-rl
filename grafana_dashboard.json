@@ -1,0 +1,72 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "title": "System P99 / P95 / P50 Latency (Seconds)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(load_balancer_http_request_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "P99 Latency"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(load_balancer_http_request_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "P95 Latency"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(load_balancer_http_request_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "P50 Latency"
+        }
+      ]
+    },
+    {
+      "title": "Backend Node CPU Utilization (%)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "load_balancer_node_cpu_utilization",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "title": "RL Routing Weights Distribution",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "load_balancer_routing_weight",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "title": "QoS Traffic Shedding (Low Priority Shed Count)",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum(load_balancer_qos_load_shed_total)",
+          "legendFormat": "Shed Requests"
+        }
+      ]
+    }
+  ],
+  "refresh": "1s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["load-balancer", "ai", "reinforcement-learning"],
+  "time": {"from": "now-5m", "to": "now"},
+  "title": "Netflix RL Load Balancer Observability",
+  "uid": "netflix-rl-lb-dashboard"
+}
