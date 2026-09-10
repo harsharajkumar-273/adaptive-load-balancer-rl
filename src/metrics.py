@@ -26,6 +26,13 @@ if HAS_PROMETHEUS:
         ["endpoint", "priority", "routed_to"],
         buckets=(0.01, 0.025, 0.05, 0.08, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0)
     )
+else:
+    PROM_ROUTING_WEIGHT = None
+    PROM_NODE_CPU = None
+    PROM_NODE_QUEUE = None
+    PROM_CIRCUIT_BREAKER = None
+    PROM_QOS_SHED_TOTAL = None
+    PROM_REQUEST_LATENCY = None
 
 def generate_prometheus_metrics(telemetry: Dict[str, Any], qos_shed_counts: Dict[str, int]) -> tuple[bytes, str]:
     """Generates standard Prometheus exposition formatted metrics payload."""
@@ -46,8 +53,9 @@ def generate_prometheus_metrics(telemetry: Dict[str, Any], qos_shed_counts: Dict
         PROM_CIRCUIT_BREAKER.set(cb_tripped)
         
         for priority, count in qos_shed_counts.items():
-            # Update metric safely
-            pass
+            current = PROM_QOS_SHED_TOTAL.labels(priority=priority)._value.get()
+            if count > current:
+                PROM_QOS_SHED_TOTAL.labels(priority=priority).inc(count - current)
 
         return generate_latest(), CONTENT_TYPE_LATEST
 

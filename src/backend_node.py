@@ -12,6 +12,7 @@ import math
 import random
 import time
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status, Body
 
 # Ensure parent directory is on sys.path for absolute imports
@@ -22,7 +23,27 @@ from src.shared_state import DistributedStateCache
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
 
-app = FastAPI(title="Backend Cluster Microservice Node")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global node_idx, spec, registry
+    if registry:
+        region = "us-east" if node_idx % 2 == 0 else "us-west"
+        registry.register_instance(
+            node_idx=node_idx,
+            name=spec.get("name", f"Instance-{node_idx+1}"),
+            host="127.0.0.1",
+            port=spec.get("port", 8001 + node_idx),
+            capacity=spec.get("capacity", 50.0),
+            base_latency_ms=spec.get("base_latency_ms", 20.0),
+            region=region
+        )
+    hb_task = asyncio.create_task(heartbeat_loop())
+    yield
+    hb_task.cancel()
+    if registry:
+        registry.deregister_instance(node_idx)
+
+app = FastAPI(title="Backend Cluster Microservice Node", lifespan=lifespan)
 
 # Global state for the running node
 node_idx: int = 0
@@ -160,27 +181,7 @@ async def heartbeat_loop():
             pass
         await asyncio.sleep(0.1)
 
-@app.on_event("startup")
-async def startup_event():
-    global node_idx, spec, registry
-    if registry:
-        region = "us-east" if node_idx % 2 == 0 else "us-west"
-        registry.register_instance(
-            node_idx=node_idx,
-            name=spec.get("name", f"Instance-{node_idx+1}"),
-            host="127.0.0.1",
-            port=spec.get("port", 8001 + node_idx),
-            capacity=spec.get("capacity", 50.0),
-            base_latency_ms=spec.get("base_latency_ms", 20.0),
-            region=region
-        )
-    asyncio.create_task(heartbeat_loop())
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    global node_idx, registry
-    if registry:
-        registry.deregister_instance(node_idx)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Distributed Backend Cluster Node")

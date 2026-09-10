@@ -23,9 +23,8 @@ from src.shared_state import DistributedStateCache
 from src.routing_strategies import RoutingEngine
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
-from src.metrics import generate_prometheus_metrics
-
-app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway")
+from contextlib import asynccontextmanager
+from src.metrics import generate_prometheus_metrics, HAS_PROMETHEUS, PROM_REQUEST_LATENCY
 
 qos_shed_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0}
 
@@ -41,20 +40,29 @@ REGION_LATENCY_PENALTY = {
     ("us-west", "ap-south"): 140.0,
 }
 
-@app.on_event("startup")
-async def startup_event():
+def get_node_url(registry: ServiceRegistry, chosen_idx: int) -> str:
+    """Dynamically resolves backend instance URL from service registry or fallback list."""
+    if registry:
+        with registry._lock:
+            if chosen_idx in registry._instances:
+                return registry._instances[chosen_idx]["url"]
+    if chosen_idx < len(BACKEND_URLS):
+        return BACKEND_URLS[chosen_idx]
+    return f"http://127.0.0.1:{8001 + chosen_idx}"
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Initializes connection-pooled async HTTP client, routing engine & service registry."""
     limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000)
     app.state.client = httpx.AsyncClient(timeout=4.0, limits=limits)
-    app.state.shared_cache = DistributedStateCache(num_instances=NUM_INSTANCES)
+    app.state.shared_cache = getattr(app.state, "shared_cache", None) or DistributedStateCache(num_instances=NUM_INSTANCES)
     app.state.routing_engine = RoutingEngine(num_instances=NUM_INSTANCES)
     app.state.registry = ServiceRegistry(app.state.shared_cache)
     app.state.current_strategy = ROUTING_STRATEGY
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Closes HTTP client connections on exit."""
+    yield
     await app.state.client.aclose()
+
+app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway", lifespan=lifespan)
 
 async def forward_proxy_request(
     request: Request,
@@ -103,7 +111,7 @@ async def forward_proxy_request(
     geo_penalty = REGION_LATENCY_PENALTY.get((client_region.lower(), node_region), 40.0)
 
     # Proxy request
-    target_url = f"{BACKEND_URLS[chosen_idx]}/work"
+    target_url = f"{get_node_url(request.app.state.registry, chosen_idx)}/work"
     start_time = time.time()
     
     try:
@@ -123,11 +131,42 @@ async def forward_proxy_request(
         breached_sla = latency_ms > SLA_LATENCY_MS
         shared_cache.record_request_outcome(chosen_idx, latency_ms, success, breached_sla)
         
+        if HAS_PROMETHEUS:
+            try:
+                PROM_REQUEST_LATENCY.labels(
+                    endpoint=request.url.path,
+                    priority=priority,
+                    routed_to=f"Node-{chosen_idx + 1}"
+                ).observe(latency_ms / 1000.0)
+            except Exception:
+                pass
+        
         res_data = proxy_resp.json()
         res_data["geo_penalty_ms"] = geo_penalty
         return res_data
         
     except httpx.RequestError:
+        # High Availability: failover retry to another healthy node
+        fallback_candidates = [i for i in range(len(cpu_list)) if i != chosen_idx and cpu_list[i] < 85.0]
+        if fallback_candidates:
+            alt_idx = min(fallback_candidates, key=lambda i: queue_list[i] if i < len(queue_list) else 0)
+            alt_url = f"{get_node_url(request.app.state.registry, alt_idx)}/work"
+            try:
+                proxy_resp = await http_client.get(alt_url)
+                latency_ms = ((time.time() - start_time) * 1000.0) + geo_penalty
+                success = (proxy_resp.status_code == status.HTTP_200_OK)
+                breached_sla = latency_ms > SLA_LATENCY_MS
+                shared_cache.record_request_outcome(alt_idx, latency_ms, success, breached_sla)
+                response.headers["X-Routed-To"] = f"Node-{alt_idx + 1}"
+                response.headers["X-Routing-Mode"] = f"{routing_mode}_failover"
+                response.headers["X-Proxy-Latency"] = f"{latency_ms:.2f} ms"
+                response.status_code = proxy_resp.status_code
+                res_data = proxy_resp.json()
+                res_data["geo_penalty_ms"] = geo_penalty
+                return res_data
+            except Exception:
+                pass
+
         latency_ms = ((time.time() - start_time) * 1000.0) + geo_penalty
         shared_cache.record_request_outcome(chosen_idx, latency_ms, False, True)
         
