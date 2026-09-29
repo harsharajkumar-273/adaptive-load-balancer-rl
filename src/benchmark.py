@@ -1,15 +1,18 @@
 # src/benchmark.py
 """
-Automated Performance Benchmarking Engine.
-Executes reproducible load tests comparing Round Robin, Weighted Round Robin,
-Least Connections, Power of Two Choices (P2C), and LinTS RL Adaptive load balancers.
-Measures Throughput (RPS), Latency Percentiles (P50/P95/P99), SLA Violation %,
-5xx Error %, and CPU Balance Index across target load levels.
+Single-gateway benchmark of the production routing strategies.
+
+Runs a discrete-event simulation of the heterogeneous fleet in config.py and
+compares Round Robin, Weighted Round Robin, Least Connections, P2C and the LinTS
+agent. Every configuration is repeated over several seeds and reported as
+mean +/- 95% CI, with the CPU action mask both ON (production default) and OFF
+(isolates what the learning itself contributes).
+
+For the multi-gateway herding experiments, see research/.
 """
 import sys
 import os
-import asyncio
-import time
+import argparse
 import random
 import numpy as np
 from typing import Dict, List, Any
@@ -22,7 +25,8 @@ from src.config import BACKEND_SPECS, NUM_INSTANCES
 
 import heapq
 import math
-from src.shared_state import DistributedStateCache, MockRedis
+import time
+from src.shared_state import DistributedStateCache
 from src.agent import ContextualBanditAgent
 
 class InProcessBenchmark:
@@ -31,8 +35,8 @@ class InProcessBenchmark:
     Simulates heterogeneous backend nodes with dynamic queueing, CPU saturation curves,
     and online Reinforcement Learning (Contextual Bandit) adaptation.
     """
-    def __init__(self):
-        self.engine = RoutingEngine(num_instances=NUM_INSTANCES)
+    def __init__(self, apply_cpu_mask: bool = True):
+        self.engine = RoutingEngine(num_instances=NUM_INSTANCES, apply_cpu_mask=apply_cpu_mask)
         self.specs = BACKEND_SPECS
 
     def _compute_node_latency(self, node_idx: int, active_conns: int, cpu: float, extra_delay: float = 0.0) -> float:
@@ -51,17 +55,20 @@ class InProcessBenchmark:
         strategy: str,
         target_rps: int,
         duration_sec: int = 3,
-        chaos_node_idx: int = None
+        chaos_node_idx: int = None,
+        seed: int = 0
     ) -> Dict[str, Any]:
         """
         Executes a discrete-event traffic simulation across the target duration.
         """
+        random.seed(seed)
+        np.random.seed(seed)
+
         # Set up state cache and RL agent if strategy is lin_ts
-        cache = DistributedStateCache(num_instances=NUM_INSTANCES)
-        cache.client = MockRedis()
+        cache = DistributedStateCache.in_memory(num_instances=NUM_INSTANCES)
         agent = None
         if strategy == "lin_ts":
-            agent = ContextualBanditAgent(num_instances=NUM_INSTANCES, shared_cache=cache)
+            agent = ContextualBanditAgent(num_instances=NUM_INSTANCES, shared_cache=cache, load_checkpoint=False)
             # Pre-train / warm up agent with initial uniform context
             init_contexts = [np.ones(6) for _ in range(NUM_INSTANCES)]
             agent.prev_context_vectors = init_contexts
@@ -191,79 +198,97 @@ class InProcessBenchmark:
             "node_distribution": node_counts
         }
 
-def run_all_benchmarks():
-    bench = InProcessBenchmark()
-    strategies = [
-        "round_robin",
-        "weighted_round_robin",
-        "least_conn",
-        "p2c",
-        "lin_ts"
-    ]
+STRATEGY_LABELS = {
+    "round_robin": "Round Robin",
+    "weighted_round_robin": "Weighted Round Robin",
+    "least_conn": "Least Connections",
+    "p2c": "Power of Two Choices (P2C)",
+    "lin_ts": "LinTS (contextual bandit)",
+}
+
+METRICS = ["p50_ms", "p95_ms", "p99_ms", "sla_violation_pct", "error_pct"]
+
+
+def _mean_ci(values: List[float]) -> str:
+    """Mean +/- 95% CI half-width (normal approximation)."""
+    arr = np.asarray(values, dtype=float)
+    if len(arr) < 2:
+        return f"{arr.mean():.1f}"
+    half = 1.96 * arr.std(ddof=1) / np.sqrt(len(arr))
+    return f"{arr.mean():.1f} ± {half:.1f}"
+
+
+def _run_seeds(bench: InProcessBenchmark, strategy: str, seeds: int, **kwargs) -> Dict[str, List[float]]:
+    results = {m: [] for m in METRICS}
+    for seed in range(seeds):
+        res = bench.run_strategy_benchmark(strategy, seed=seed, **kwargs)
+        for m in METRICS:
+            results[m].append(res[m])
+    return results
+
+
+def _table_header() -> str:
+    return ("| Scenario | CPU mask | Strategy | P50 (ms) | P95 (ms) | P99 (ms) | SLA breach % | Error % |\n"
+            "|:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|\n")
+
+
+def _table_row(scenario: str, mask: bool, strategy: str, r: Dict[str, List[float]]) -> str:
+    cells = " | ".join(_mean_ci(r[m]) for m in METRICS)
+    return f"| {scenario} | {'on' if mask else 'off'} | {STRATEGY_LABELS[strategy]} | {cells} |"
+
+
+def run_all_benchmarks(seeds: int = 5, duration_sec: int = 3, output: str = "benchmark_results.md"):
+    strategies = list(STRATEGY_LABELS)
     load_levels = [100, 500, 1000]
+    started = time.time()
 
-    print("\n" + "="*90)
-    print(" 🚀 COMPARATIVE BENCHMARK SUITE: STEADY-STATE HETEROGENEOUS CLUSTER")
-    print("="*90 + "\n")
+    report = [
+        "# Single-Gateway Benchmark Report",
+        "",
+        f"Discrete-event simulation of the 5-node heterogeneous fleet in `src/config.py`. "
+        f"Each cell is mean ± 95% CI over {seeds} seeds ({duration_sec}s of simulated traffic per run). "
+        "Generated by `python src/benchmark.py`; do not edit by hand.",
+        "",
+        "The CPU mask (weight 0 for nodes above 85% CPU) is applied identically to every strategy. "
+        "Rows with the mask **off** show what each routing policy achieves on its own.",
+        "",
+        "## Steady state",
+        "",
+        _table_header().rstrip("\n"),
+    ]
 
-    report_md = "# Comparative Load Balancer Performance Benchmark Report\n\n"
-    report_md += "## 1. Heterogeneous Microservice Cluster Benchmark\n\n"
-    report_md += "| Target Load | Strategy | Simulated Throughput | P50 (ms) | P95 (ms) | P99 (ms) | SLA Breaches (>200ms) | Error % |\n"
-    report_md += "|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|\n"
+    for mask in (True, False):
+        bench = InProcessBenchmark(apply_cpu_mask=mask)
+        for rps in load_levels:
+            for strat in strategies:
+                r = _run_seeds(bench, strat, seeds, target_rps=rps, duration_sec=duration_sec)
+                line = _table_row(f"{rps} RPS", mask, strat, r)
+                print(line)
+                report.append(line)
 
-    for rps in load_levels:
+    report += [
+        "",
+        "## Degraded node (Node 1 forced to 95% CPU, +300 ms, 80% errors) at 500 RPS",
+        "",
+        _table_header().rstrip("\n"),
+    ]
+    for mask in (True, False):
+        bench = InProcessBenchmark(apply_cpu_mask=mask)
         for strat in strategies:
-            res = bench.run_strategy_benchmark(strat, target_rps=rps, duration_sec=3)
-            strat_name = strat.upper()
-            if strat == "lin_ts":
-                strat_name = "**RL Adaptive (LinTS)**"
-            elif strat == "p2c":
-                strat_name = "Power of Two Choices (P2C)"
-            elif strat == "least_conn":
-                strat_name = "Least Connections"
-            elif strat == "round_robin":
-                strat_name = "Round Robin"
-            elif strat == "weighted_round_robin":
-                strat_name = "Weighted Round Robin"
-
-            line = f"| {res['target_rps']} RPS | {strat_name} | {res['actual_rps']:.1f} req/s | {res['p50_ms']:.1f} ms | {res['p95_ms']:.1f} ms | {res['p99_ms']:.1f} ms | {res['sla_violation_pct']:.1f}% | {res['error_pct']:.1f}% |"
+            r = _run_seeds(bench, strat, seeds, target_rps=500, duration_sec=duration_sec, chaos_node_idx=0)
+            line = _table_row("500 RPS + fault", mask, strat, r)
             print(line)
-            report_md += line + "\n"
+            report.append(line)
 
-    # Degradation / Chaos Benchmark
-    print("\n" + "="*90)
-    print(" 💥 CHAOS & DEGRADATION BENCHMARK (95% CPU Spike on Node 1 at 500 RPS)")
-    print("="*90 + "\n")
+    with open(output, "w") as f:
+        f.write("\n".join(report) + "\n")
+    print(f"\nSaved report to '{output}' in {time.time() - started:.0f}s")
 
-    report_md += "\n## 2. Chaos / Node Degradation Benchmark (Node 1 CPU Saturation at 500 RPS)\n\n"
-    report_md += "| Strategy | P50 (ms) | P95 (ms) | P99 (ms) | SLA Breaches (>200ms) | Error % | Resilience Behavior |\n"
-    report_md += "|:---|:---:|:---:|:---:|:---:|:---:|:---|\n"
-
-    chaos_strats = ["round_robin", "least_conn", "lin_ts"]
-    for strat in chaos_strats:
-        res = bench.run_strategy_benchmark(strat, target_rps=500, duration_sec=3, chaos_node_idx=0)
-        strat_name = strat.upper()
-        if strat == "lin_ts":
-            strat_name = "**RL Adaptive (LinTS)**"
-            behavior = "✅ Instantly masks degraded node, shifts traffic to healthy nodes"
-        elif strat == "least_conn":
-            strat_name = "Least Connections"
-            behavior = "⚠️ Lagging queue feedback still routes into saturated node initially"
-        elif strat == "round_robin":
-            strat_name = "Round Robin"
-            behavior = "❌ Blind routing causes severe cascading errors & SLA breaches"
-
-        line = f"| {strat_name} | {res['p50_ms']:.1f} ms | {res['p95_ms']:.1f} ms | {res['p99_ms']:.1f} ms | {res['sla_violation_pct']:.1f}% | {res['error_pct']:.1f}% | {behavior} |"
-        print(line)
-        report_md += line + "\n"
-
-    print("\n" + "="*90)
-    print(" Benchmark completed successfully!")
-    print("="*90 + "\n")
-
-    with open("benchmark_results.md", "w") as f:
-        f.write(report_md)
-    print(" Saved updated benchmark report to 'benchmark_results.md'")
 
 if __name__ == "__main__":
-    run_all_benchmarks()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--seeds", type=int, default=5)
+    parser.add_argument("--duration", type=int, default=3, help="Simulated seconds per run")
+    parser.add_argument("--output", default="benchmark_results.md")
+    args = parser.parse_args()
+    run_all_benchmarks(seeds=args.seeds, duration_sec=args.duration, output=args.output)

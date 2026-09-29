@@ -13,8 +13,7 @@ from src.metrics import generate_prometheus_metrics
 
 @pytest.fixture
 def mock_cache():
-    cache = DistributedStateCache(num_instances=5)
-    cache.client = MockRedis()
+    cache = DistributedStateCache.in_memory(num_instances=5)
     cache.set_routing_weights([0.2, 0.2, 0.2, 0.2, 0.2])
     return cache
 

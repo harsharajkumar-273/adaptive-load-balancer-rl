@@ -11,10 +11,11 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
+import logging
 import subprocess
 import time
 import uvicorn
-from src.config import PORT, HOST, BACKEND_URLS
+from src.config import PORT, HOST, NUM_INSTANCES, MAX_INSTANCES
 from src.shared_state import DistributedStateCache
 from src.simulator import TrafficGenerator
 from src.agent import ContextualBanditAgent
@@ -57,15 +58,16 @@ async def shutdown_system(tasks, node_processes, autoscaler):
     print("[System] All services shut down successfully.")
 
 async def main():
-    cache = DistributedStateCache(num_instances=5)
-    
-    print("[System] Spawning initial 5 backend microservices in subprocesses...")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    cache = DistributedStateCache(num_instances=NUM_INSTANCES)
+
+    print(f"[System] Spawning initial {NUM_INSTANCES} backend microservices in subprocesses...")
     node_processes = []
     
     is_docker = os.environ.get("RUNNING_IN_DOCKER", "false").lower() == "true"
     
     if not is_docker:
-        for i in range(5):
+        for i in range(NUM_INSTANCES):
             port = 8001 + i
             p = subprocess.Popen([
                 sys.executable, "src/backend_node.py",
@@ -78,7 +80,7 @@ async def main():
         await asyncio.sleep(2.0)
 
     # Initialize Control Plane RL Agent
-    agent = ContextualBanditAgent(num_instances=5, shared_cache=cache)
+    agent = ContextualBanditAgent(num_instances=NUM_INSTANCES, shared_cache=cache)
     
     # Initialize Telemetry Dashboard
     dashboard = TelemetryDashboard(cache)
@@ -87,7 +89,7 @@ async def main():
     traffic_generator = TrafficGenerator(port=PORT, shared_cache=cache)
 
     # Initialize HPA Cluster AutoScaler
-    autoscaler = ClusterAutoScaler(shared_cache=cache, min_nodes=5, max_nodes=10)
+    autoscaler = ClusterAutoScaler(shared_cache=cache, min_nodes=NUM_INSTANCES, max_nodes=MAX_INSTANCES)
 
     # Start Control Plane, Traffic, Dashboard, and AutoScaler loops
     await agent.start()
@@ -102,7 +104,7 @@ async def main():
 
     config = uvicorn.Config(
         app=app,
-        host="0.0.0.0",
+        host=HOST,
         port=PORT,
         log_level="warning",
         loop="asyncio"

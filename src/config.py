@@ -17,7 +17,7 @@ def load_yaml_fallback(filepath: str) -> dict:
             data = yaml.safe_load(f)
             if isinstance(data, dict):
                 return data
-    except Exception:
+    except ImportError:
         pass
     
     # Basic line parser fallback
@@ -86,7 +86,10 @@ def _get_dict(source, key):
 
 # Cluster Settings
 _cluster = _get_dict(_yaml_config, "cluster")
-NUM_INSTANCES = _cluster.get("num_instances", 5)
+NUM_INSTANCES = int(_cluster.get("num_instances", 5))
+# Upper bound on fleet size (autoscaler ceiling). The live fleet size is
+# discovered from node heartbeats and always lies in [NUM_INSTANCES, MAX_INSTANCES].
+MAX_INSTANCES = int(os.environ.get("MAX_INSTANCES", _cluster.get("max_instances", 10)))
 PORT = int(os.environ.get("PORT", _cluster.get("port", 8000)))
 HOST = os.environ.get("HOST", _cluster.get("host", "0.0.0.0"))
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", _cluster.get("checkpoint_path", "model_checkpoint.npz"))

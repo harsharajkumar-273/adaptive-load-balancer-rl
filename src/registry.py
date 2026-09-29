@@ -6,8 +6,11 @@ and deregister on shutdown, eliminating hardcoded node list limitations.
 """
 import time
 import json
+import logging
 import threading
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
+
+logger = logging.getLogger(__name__)
 
 class ServiceRegistry:
     def __init__(self, shared_cache):
@@ -48,8 +51,8 @@ class ServiceRegistry:
                 self.shared_cache.client.set(f"registry:instance:{node_idx}", json.dumps(info))
                 self.shared_cache.client.set(f"registry:active_nodes_count", str(len(self._instances)))
             except Exception:
-                pass
-                
+                logger.warning("Failed to persist registration of node %d", node_idx, exc_info=True)
+
             return info
 
     def deregister_instance(self, node_idx: int) -> bool:
@@ -61,7 +64,7 @@ class ServiceRegistry:
                     self.shared_cache.client.delete(f"registry:instance:{node_idx}")
                     self.shared_cache.client.set(f"registry:active_nodes_count", str(len(self._instances)))
                 except Exception:
-                    pass
+                    logger.warning("Failed to persist deregistration of node %d", node_idx, exc_info=True)
                 return True
             return False
 

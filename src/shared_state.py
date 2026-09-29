@@ -4,10 +4,16 @@ Redis-based distributed state cache with Redis Pub/Sub Event-Driven Streaming & 
 """
 import json
 import time
+import logging
 import threading
 from typing import Dict, List, Any, Tuple, Optional
 import redis
-from src.config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from src.config import REDIS_HOST, REDIS_PORT, REDIS_DB, MAX_INSTANCES
+
+logger = logging.getLogger(__name__)
+
+# A node whose heartbeat is older than this is treated as offline.
+HEARTBEAT_TIMEOUT_SEC = 2.0
 
 class MockPubSub:
     def __init__(self, channels_dict, channel_name):
@@ -66,6 +72,9 @@ class MockRedis:
             new_val = val - amount
             self._db[key] = str(new_val)
             return new_val
+
+    def mget(self, keys: List[str]) -> List[Optional[bytes]]:
+        return [self.get(k) for k in keys]
 
     def lpush(self, key: str, *values: Any) -> int:
         with self._lock:
@@ -131,9 +140,22 @@ class MockRedis:
 
 
 class DistributedStateCache:
-    def __init__(self, num_instances: int):
+    """
+    Shared cluster state backed by Redis (or an in-process MockRedis fallback).
+
+    `num_instances` is the live fleet size. It starts at `min_instances` and is
+    re-discovered from node heartbeats on every `get_instance_metrics()` call, so
+    nodes added by the autoscaler (up to `max_instances`) become routable, and
+    trailing nodes that stop heartbeating are dropped again.
+    """
+
+    _NODE_FIELDS = ("last_seen", "cpu", "queue", "recent_p99", "recent_error_rate", "recent_sla_breach_rate")
+
+    def __init__(self, num_instances: int, max_instances: int = MAX_INSTANCES):
+        self.min_instances = num_instances
+        self.max_instances = max(num_instances, max_instances)
         self.num_instances = num_instances
-        
+
         # Connect to Redis with fallback
         try:
             self.client = redis.Redis(
@@ -145,6 +167,10 @@ class DistributedStateCache:
             self.client.ping()
             self.is_mock = False
         except Exception:
+            logger.warning(
+                "Redis unreachable at %s:%s; using in-process MockRedis. "
+                "State will NOT be shared across processes.", REDIS_HOST, REDIS_PORT
+            )
             self.client = MockRedis()
             self.is_mock = True
 
@@ -153,16 +179,27 @@ class DistributedStateCache:
             init_weights = [1.0 / num_instances] * num_instances
             self.set_routing_weights(init_weights)
 
+    @classmethod
+    def in_memory(cls, num_instances: int, max_instances: int = MAX_INSTANCES) -> "DistributedStateCache":
+        """Builds a cache on MockRedis without attempting a Redis connection (tests, simulations)."""
+        cache = cls.__new__(cls)
+        cache.min_instances = num_instances
+        cache.max_instances = max(num_instances, max_instances)
+        cache.num_instances = num_instances
+        cache.client = MockRedis()
+        cache.is_mock = True
+        cache.set_routing_weights([1.0 / num_instances] * num_instances)
+        return cache
+
     def get_routing_weights(self) -> Tuple[List[float], float]:
         """Reads routing weights and the last update timestamp."""
         try:
-            weights_raw = self.client.get("rl:routing_weights")
-            last_update_raw = self.client.get("rl:last_updated")
-            
+            weights_raw, last_update_raw = self.client.mget(["rl:routing_weights", "rl:last_updated"])
             weights = json.loads(weights_raw.decode('utf-8')) if weights_raw else [1.0 / self.num_instances] * self.num_instances
             last_update = float(last_update_raw.decode('utf-8')) if last_update_raw else time.time()
             return weights, last_update
         except Exception:
+            logger.warning("Failed to read routing weights; using uniform weights", exc_info=True)
             return [1.0 / self.num_instances] * self.num_instances, time.time()
 
     def set_routing_weights(self, weights: List[float]):
@@ -170,11 +207,11 @@ class DistributedStateCache:
         try:
             total = sum(weights)
             normalized = [w / total for w in weights] if total > 0 else [1.0 / len(weights)] * len(weights)
-            
+
             self.client.set("rl:routing_weights", json.dumps(normalized))
             self.client.set("rl:last_updated", str(time.time()))
         except Exception:
-            pass
+            logger.warning("Failed to write routing weights", exc_info=True)
 
     def record_node_heartbeat(self, node_idx: int, cpu: float, queue: int):
         """Called by independent backend node processes to register their load metrics."""
@@ -183,68 +220,73 @@ class DistributedStateCache:
             self.client.set(f"node:{node_idx}:queue", str(queue))
             self.client.set(f"node:{node_idx}:last_seen", str(time.time()))
         except Exception:
-            pass
+            logger.warning("Failed to record heartbeat for node %d", node_idx, exc_info=True)
+
+    @staticmethod
+    def _as_float(raw: Optional[bytes], default: float) -> float:
+        return float(raw.decode('utf-8')) if raw else default
 
     def get_instance_metrics(self) -> Dict[str, List[Any]]:
-        """Collects metrics across all nodes for gateway routing & dashboard checks."""
-        cpu_list = [0.0] * self.num_instances
-        queue_list = [0] * self.num_instances
-        p99_list = [0.0] * self.num_instances
-        error_list = [0.0] * self.num_instances
-        sla_list = [0.0] * self.num_instances
-        
+        """
+        Collects metrics for every node with a single batched MGET and refreshes
+        the live fleet size from heartbeats.
+        """
+        n_fields = len(self._NODE_FIELDS)
+        keys = [f"node:{i}:{field}" for i in range(self.max_instances) for field in self._NODE_FIELDS]
+        try:
+            raw = self.client.mget(keys)
+        except Exception:
+            logger.warning("Failed to read node metrics", exc_info=True)
+            raw = [None] * len(keys)
+
         current_time = time.time()
+        rows = [raw[i * n_fields:(i + 1) * n_fields] for i in range(self.max_instances)]
+        alive = [
+            current_time - self._as_float(row[0], 0.0) <= HEARTBEAT_TIMEOUT_SEC
+            for row in rows
+        ]
 
+        # Fleet = the configured minimum plus any higher-indexed nodes that are alive.
+        highest_alive = max((i for i, a in enumerate(alive) if a), default=-1)
+        self.num_instances = max(self.min_instances, highest_alive + 1)
+
+        metrics = {"cpu": [], "queue": [], "p99": [], "error_rate": [], "sla_breach_rate": []}
         for i in range(self.num_instances):
-            try:
-                last_seen_raw = self.client.get(f"node:{i}:last_seen")
-                last_seen = float(last_seen_raw.decode('utf-8')) if last_seen_raw else 0.0
-                
-                if current_time - last_seen > 2.0:
-                    cpu_list[i] = 100.0
-                    queue_list[i] = 999
-                else:
-                    cpu_raw = self.client.get(f"node:{i}:cpu")
-                    queue_raw = self.client.get(f"node:{i}:queue")
-                    cpu_list[i] = float(cpu_raw.decode('utf-8')) if cpu_raw else 5.0
-                    queue_list[i] = int(queue_raw.decode('utf-8')) if queue_raw else 0
+            _, cpu_raw, queue_raw, p99_raw, err_raw, sla_raw = rows[i]
+            if alive[i]:
+                metrics["cpu"].append(self._as_float(cpu_raw, 5.0))
+                metrics["queue"].append(int(queue_raw.decode('utf-8')) if queue_raw else 0)
+            else:
+                # Offline: report saturated so every strategy masks it.
+                metrics["cpu"].append(100.0)
+                metrics["queue"].append(999)
+            metrics["p99"].append(self._as_float(p99_raw, 0.0))
+            metrics["error_rate"].append(self._as_float(err_raw, 0.0))
+            metrics["sla_breach_rate"].append(self._as_float(sla_raw, 0.0))
 
-                p99_raw = self.client.get(f"node:{i}:recent_p99")
-                err_raw = self.client.get(f"node:{i}:recent_error_rate")
-                sla_raw = self.client.get(f"node:{i}:recent_sla_breach_rate")
-
-                p99_list[i] = float(p99_raw.decode('utf-8')) if p99_raw else 0.0
-                error_list[i] = float(err_raw.decode('utf-8')) if err_raw else 0.0
-                sla_list[i] = float(sla_raw.decode('utf-8')) if sla_raw else 0.0
-            except Exception:
-                pass
-
-        return {
-            "cpu": cpu_list,
-            "queue": queue_list,
-            "p99": p99_list,
-            "error_rate": error_list,
-            "sla_breach_rate": sla_list
-        }
+        return metrics
 
     def record_request_outcome(self, node_idx: int, latency_ms: float, success: bool, breached_sla: bool):
-        """Called by Gateway to record telemetry and publish event to Redis Pub/Sub channel."""
+        """Called by the Gateway to record per-request telemetry into the current feedback window."""
         try:
-            self.client.incr("global:total_requests")
+            pipe = self.client.pipeline() if hasattr(self.client, "pipeline") else self.client
+            pipe.incr("global:total_requests")
             if breached_sla:
-                self.client.incr("global:breached_sla_requests")
+                pipe.incr("global:breached_sla_requests")
 
-            self.client.lpush("global:system_latencies", str(latency_ms))
-            self.client.ltrim("global:system_latencies", 0, 1999)
+            pipe.lpush("global:system_latencies", str(latency_ms))
+            pipe.ltrim("global:system_latencies", 0, 1999)
 
-            self.client.incr(f"window:node:{node_idx}:requests")
-            self.client.lpush(f"window:node:{node_idx}:latencies", str(latency_ms))
+            pipe.incr(f"window:node:{node_idx}:requests")
+            pipe.lpush(f"window:node:{node_idx}:latencies", str(latency_ms))
             if not success:
-                self.client.incr(f"window:node:{node_idx}:errors")
+                pipe.incr(f"window:node:{node_idx}:errors")
             if breached_sla:
-                self.client.incr(f"window:node:{node_idx}:sla_breaches")
+                pipe.incr(f"window:node:{node_idx}:sla_breaches")
 
-            # EVENT STREAMING: Publish event payload to Redis Pub/Sub stream
+            # Outcome event stream for external observers (dashboards, loggers).
+            # The RL agent does NOT learn from this stream; it learns only from the
+            # windowed aggregates above, so each outcome is counted exactly once.
             payload = json.dumps({
                 "node_idx": node_idx,
                 "latency_ms": latency_ms,
@@ -252,9 +294,11 @@ class DistributedStateCache:
                 "breached_sla": breached_sla,
                 "timestamp": time.time()
             })
-            self.client.publish("events:request_outcomes", payload)
+            pipe.publish("events:request_outcomes", payload)
+            if pipe is not self.client:
+                pipe.execute()
         except Exception:
-            pass
+            logger.warning("Failed to record request outcome for node %d", node_idx, exc_info=True)
 
     def flush_window_feedback(self) -> Dict[str, Any]:
         """Called by RL control agent to gather window feedback and flush counters."""
@@ -268,20 +312,20 @@ class DistributedStateCache:
                 reqs_raw = self.client.getset(f"window:node:{i}:requests", 0)
                 errs_raw = self.client.getset(f"window:node:{i}:errors", 0)
                 sla_raw = self.client.getset(f"window:node:{i}:sla_breaches", 0)
-                
+
                 reqs = int(reqs_raw.decode('utf-8')) if reqs_raw else 0
                 errs = int(errs_raw.decode('utf-8')) if errs_raw else 0
                 sla_breaches = int(sla_raw.decode('utf-8')) if sla_raw else 0
 
                 latencies_raw = self.client.lrange(f"window:node:{i}:latencies", 0, -1)
                 self.client.delete(f"window:node:{i}:latencies")
-                
+
                 latencies = [float(l.decode('utf-8')) for l in latencies_raw] if latencies_raw else []
 
                 p99 = 0.0
                 err_rate = 0.0
                 sla_breach_rate = 0.0
-                
+
                 if reqs > 0:
                     if latencies:
                         latencies.sort()
@@ -294,10 +338,14 @@ class DistributedStateCache:
                     self.client.set(f"node:{i}:recent_error_rate", str(err_rate))
                     self.client.set(f"node:{i}:recent_sla_breach_rate", str(sla_breach_rate))
                 else:
-                    p99_old = float(self.client.get(f"node:{i}:recent_p99").decode('utf-8')) if self.client.get(f"node:{i}:recent_p99") else 0.0
-                    err_old = float(self.client.get(f"node:{i}:recent_error_rate").decode('utf-8')) if self.client.get(f"node:{i}:recent_error_rate") else 0.0
-                    sla_old = float(self.client.get(f"node:{i}:recent_sla_breach_rate").decode('utf-8')) if self.client.get(f"node:{i}:recent_sla_breach_rate") else 0.0
-                    
+                    # No traffic this window: decay the stale estimates towards zero.
+                    p99_old, err_old, sla_old = (
+                        self._as_float(v, 0.0) for v in self.client.mget([
+                            f"node:{i}:recent_p99",
+                            f"node:{i}:recent_error_rate",
+                            f"node:{i}:recent_sla_breach_rate",
+                        ])
+                    )
                     self.client.set(f"node:{i}:recent_p99", str(p99_old * 0.8))
                     self.client.set(f"node:{i}:recent_error_rate", str(err_old * 0.8))
                     self.client.set(f"node:{i}:recent_sla_breach_rate", str(sla_old * 0.8))
@@ -310,6 +358,7 @@ class DistributedStateCache:
                     "sla_breach_rate": sla_breach_rate
                 })
             except Exception:
+                logger.warning("Failed to flush feedback window for node %d", i, exc_info=True)
                 feedback.append({
                     "instance_idx": i,
                     "requests_count": 0,
@@ -327,12 +376,14 @@ class DistributedStateCache:
     def get_telemetry(self) -> Dict[str, Any]:
         """Reads status metrics for the telemetry dashboard."""
         try:
-            total_raw = self.client.get("global:total_requests")
-            breached_raw = self.client.get("global:breached_sla_requests")
-            rate_raw = self.client.get("global:request_rate")
-            spike_raw = self.client.get("global:traffic_spike_active")
-            cb_raw = self.client.get("global:circuit_breaker_tripped")
-            
+            total_raw, breached_raw, rate_raw, spike_raw, cb_raw = self.client.mget([
+                "global:total_requests",
+                "global:breached_sla_requests",
+                "global:request_rate",
+                "global:traffic_spike_active",
+                "global:circuit_breaker_tripped",
+            ])
+
             total_requests = int(total_raw.decode('utf-8')) if total_raw else 0
             breached_sla_requests = int(breached_raw.decode('utf-8')) if breached_raw else 0
             global_request_rate = float(rate_raw.decode('utf-8')) if rate_raw else 0.0
@@ -364,22 +415,20 @@ class DistributedStateCache:
                 "circuit_breaker_tripped": circuit_breaker_tripped
             }
         except Exception:
+            logger.warning("Failed to read telemetry", exc_info=True)
             return {}
 
-    def set_global_request_rate(self, rate: float):
+    def _set_flag(self, key: str, value: str):
         try:
-            self.client.set("global:request_rate", str(rate))
+            self.client.set(key, value)
         except Exception:
-            pass
+            logger.warning("Failed to set %s", key, exc_info=True)
+
+    def set_global_request_rate(self, rate: float):
+        self._set_flag("global:request_rate", str(rate))
 
     def set_traffic_spike_active(self, active: bool):
-        try:
-            self.client.set("global:traffic_spike_active", "1" if active else "0")
-        except Exception:
-            pass
+        self._set_flag("global:traffic_spike_active", "1" if active else "0")
 
     def set_circuit_breaker(self, tripped: bool):
-        try:
-            self.client.set("global:circuit_breaker_tripped", "1" if tripped else "0")
-        except Exception:
-            pass
+        self._set_flag("global:circuit_breaker_tripped", "1" if tripped else "0")

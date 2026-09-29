@@ -7,9 +7,11 @@ subprocesses dynamically (scaling cluster capacity from 5 up to 10 nodes).
 import sys
 import os
 import asyncio
+import logging
 import subprocess
-import time
-from typing import List, Dict, Any
+from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 class ClusterAutoScaler:
     def __init__(self, shared_cache, min_nodes: int = 5, max_nodes: int = 10):
@@ -71,7 +73,7 @@ class ClusterAutoScaler:
         await asyncio.sleep(2.0)
         while self.active:
             try:
-                metrics = self.shared_cache.get_instance_metrics()
+                metrics = await asyncio.to_thread(self.shared_cache.get_instance_metrics)
                 cpu_list = metrics.get("cpu", [])
                 
                 current_active_count = self.min_nodes + len(self.dynamic_processes)
@@ -101,6 +103,6 @@ class ClusterAutoScaler:
                         self.low_cpu_duration = max(0.0, self.low_cpu_duration - 0.5)
 
             except Exception:
-                pass
-                
+                logger.exception("Autoscaler monitor iteration failed")
+
             await asyncio.sleep(1.0)

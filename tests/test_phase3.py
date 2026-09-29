@@ -13,8 +13,7 @@ from src.autoscaler import ClusterAutoScaler
 
 @pytest.fixture
 def mock_cache():
-    cache = DistributedStateCache(num_instances=5)
-    cache.client = MockRedis()
+    cache = DistributedStateCache.in_memory(num_instances=5)
     return cache
 
 def test_service_registry(mock_cache):

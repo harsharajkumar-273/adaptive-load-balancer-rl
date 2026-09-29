@@ -17,13 +17,11 @@ from src.metrics import generate_prometheus_metrics, HAS_PROMETHEUS, PROM_QOS_SH
 
 @pytest.fixture
 def mock_cache():
-    cache = DistributedStateCache(num_instances=5)
-    cache.client = MockRedis()
-    return cache
+    return DistributedStateCache.in_memory(num_instances=5)
 
 def test_dynamic_fleet_sizing(mock_cache):
     """Verifies that ContextualBanditAgent dynamically scales its internal matrices from 5 to 10 nodes."""
-    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache)
+    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache, load_checkpoint=False)
     assert len(agent.B) == 5
     assert len(agent.f) == 5
     assert len(agent.theta_hat) == 5
@@ -45,42 +43,24 @@ def test_dynamic_fleet_sizing(mock_cache):
     # Ensure existing node 0's learned weights are preserved
     assert np.array_equal(agent.B[0], prior_B0)
 
-def test_reactive_stream_bayesian_update(mock_cache):
-    """Verifies that reactive event streaming updates the Bayesian parameter matrices."""
-    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache)
-    init_contexts = [np.ones(agent.d) for _ in range(5)]
-    agent.prev_context_vectors = init_contexts
-    prior_B2 = agent.B[2].copy()
+def test_each_outcome_updates_model_once(mock_cache):
+    """The agent learns only from windowed feedback: one window -> one update per node."""
+    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache, load_checkpoint=False)
+    agent.prev_context_vectors = [np.ones(agent.d) for _ in range(5)]
+    assert not hasattr(agent, "_event_stream_listener")
 
-    # Simulate arrival of outcome event for Node 2 with high latency
-    pubsub = mock_cache.client.pubsub()
-    payload = json.dumps({
-        "node_idx": 2,
-        "latency_ms": 220.0,
-        "success": False,
-        "breached_sla": True
-    })
-    
-    # Directly test the stream processing logic
-    data_bytes = payload.encode('utf-8')
-    data = json.loads(data_bytes.decode('utf-8'))
-    idx = data["node_idx"]
-    lat = data["latency_ms"]
-    success = data["success"]
-    sla = data["breached_sla"]
+    mock_cache.record_request_outcome(node_idx=2, latency_ms=220.0, success=False, breached_sla=True)
+    agent.update_model(mock_cache.flush_window_feedback())
 
-    latency_penalty = lat / 200.0
-    reward = -(1.0 * latency_penalty + 5.0 * (0.0 if success else 1.0) + 10.0 * (1.0 if sla else 0.0))
-    reward = max(-15.0, reward)
-    alpha = 0.05
-    x = agent.prev_context_vectors[idx]
-    agent.B[idx] += alpha * np.outer(x, x)
-    agent.f[idx] += alpha * reward * x
-    agent.theta_hat[idx] = np.linalg.solve(agent.B[idx], agent.f[idx])
+    x = np.ones(agent.d)
+    assert np.allclose(agent.B[2], np.eye(agent.d) + np.outer(x, x))
+    # A bad outcome must push the predicted reward negative.
+    assert agent.theta_hat[2] @ x < 0.0
 
-    assert not np.array_equal(agent.B[2], prior_B2)
-    # The negative reward should drive theta_hat coefficients negative
-    assert agent.theta_hat[2][0] < 0.0
+    # The window is flushed, so a second update is a no-op.
+    B2 = agent.B[2].copy()
+    agent.update_model(mock_cache.flush_window_feedback())
+    assert np.array_equal(agent.B[2], B2)
 
 def test_dynamic_node_url_resolution(mock_cache):
     """Verifies that get_node_url resolves registered, fallback, and autoscaled node URLs correctly."""

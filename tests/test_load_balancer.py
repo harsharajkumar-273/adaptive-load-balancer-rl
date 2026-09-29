@@ -12,9 +12,7 @@ from src.config import BACKEND_SPECS
 @pytest.fixture
 def mock_cache():
     """Returns a state cache forced to use MockRedis to avoid live Redis dependencies."""
-    cache = DistributedStateCache(num_instances=5)
-    # Force MockRedis
-    cache.client = MockRedis()
+    cache = DistributedStateCache.in_memory(num_instances=5)
     # Reset weights
     cache.set_routing_weights([0.2, 0.2, 0.2, 0.2, 0.2])
     return cache
@@ -73,8 +71,8 @@ def test_action_masking_boundary(mock_cache):
 
 def test_bandit_math_update(mock_cache):
     """Verifies that the Thompson Sampling agent updates its matrices without exceptions."""
-    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache)
-    
+    agent = ContextualBanditAgent(num_instances=5, shared_cache=mock_cache, load_checkpoint=False)
+
     # Reset model parameters to ensure deterministic starting point for the test
     # (prevents pre-existing checkpoint files on disk from altering test assertions)
     agent.B = [np.eye(6) for _ in range(5)]

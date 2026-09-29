@@ -18,7 +18,10 @@ from fastapi import FastAPI, Response, status, Body
 # Ensure parent directory is on sys.path for absolute imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.config import BACKEND_SPECS
+import logging
+from src.config import BACKEND_SPECS, MAX_INSTANCES
+
+logger = logging.getLogger(__name__)
 from src.shared_state import DistributedStateCache
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
@@ -178,7 +181,7 @@ async def heartbeat_loop():
             if registry:
                 registry.heartbeat(node_idx)
         except Exception:
-            pass
+            logger.warning("Heartbeat failed for node %d", node_idx, exc_info=True)
         await asyncio.sleep(0.1)
 
 
@@ -206,7 +209,7 @@ if __name__ == "__main__":
             "port": args.port
         }
     
-    cache = DistributedStateCache(num_instances=10)
+    cache = DistributedStateCache(num_instances=MAX_INSTANCES)
     registry = ServiceRegistry(cache)
     
     print(f"[Node] Starting {spec['name']} on port {args.port}...")

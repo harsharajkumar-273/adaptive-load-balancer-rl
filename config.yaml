@@ -1,6 +1,7 @@
 # config.yaml - Configuration-Driven Architecture Settings
 cluster:
-  num_instances: 5
+  num_instances: 5          # initial / minimum fleet size
+  max_instances: 10         # autoscaler ceiling
   port: 8000
   host: "0.0.0.0"
   checkpoint_path: "model_checkpoint.npz"

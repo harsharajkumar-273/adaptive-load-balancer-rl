@@ -6,22 +6,43 @@ Multi-strategy routing engine offering 5 baseline & adaptive load balancing algo
 3. p2c: Power of Two Choices
 4. round_robin: Sequential Round Robin
 5. weighted_round_robin: Capacity-Weighted Round Robin
+
+The fleet size is taken from the metrics passed to each call, so nodes added or
+removed by the autoscaler are routable immediately.
 """
 import random
 import threading
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Optional
 from src.config import BACKEND_SPECS
 
+# Nodes whose CPU exceeds this are masked out (weight 0) when masking is enabled.
+CPU_MASK_THRESHOLD = 85.0
+# Capacity assumed for autoscaled nodes that have no entry in BACKEND_SPECS
+# (matches the spec generated in backend_node.py).
+DEFAULT_AUTOSCALED_CAPACITY = 100.0
+
+VALID_STRATEGIES = ["lin_ts", "least_conn", "p2c", "round_robin", "weighted_round_robin"]
+
+
+def node_capacity(idx: int) -> float:
+    if idx < len(BACKEND_SPECS):
+        return BACKEND_SPECS[idx].get("capacity", 50.0)
+    return DEFAULT_AUTOSCALED_CAPACITY
+
+
 class RoutingEngine:
-    def __init__(self, num_instances: int):
+    def __init__(self, num_instances: Optional[int] = None, apply_cpu_mask: bool = True):
+        # num_instances is kept for backwards compatibility; the effective fleet
+        # size is always len(cpu_list) at call time.
         self.num_instances = num_instances
+        self.apply_cpu_mask = apply_cpu_mask
         self._rr_counter = 0
         self._lock = threading.Lock()
-        
-        # Calculate weights for weighted round robin based on capacity specs
-        capacities = [spec.get("capacity", 50.0) for spec in BACKEND_SPECS[:num_instances]]
+
+    def capacity_weights(self, n: int) -> List[float]:
+        capacities = [node_capacity(i) for i in range(n)]
         total_cap = sum(capacities)
-        self.capacity_weights = [c / total_cap for c in capacities] if total_cap > 0 else [1.0 / num_instances] * num_instances
+        return [c / total_cap for c in capacities] if total_cap > 0 else [1.0 / n] * n
 
     def select_instance(
         self,
@@ -35,29 +56,32 @@ class RoutingEngine:
         Returns: (chosen_idx, routing_mode_name, effective_weights)
         """
         strategy = strategy.lower()
+        n = len(cpu_list)
+        self.num_instances = n
 
-        # 1. Action Masking Guardrail: override weights to 0 if CPU > 85%
+        # 1. Action Masking Guardrail: override weights to 0 if CPU is too high.
+        #    Applied identically to every strategy so comparisons are fair.
         masked_weights = []
-        for idx in range(self.num_instances):
-            if cpu_list[idx] > 85.0:
+        for idx in range(n):
+            if self.apply_cpu_mask and cpu_list[idx] > CPU_MASK_THRESHOLD:
                 masked_weights.append(0.0)
             else:
-                masked_weights.append(weights[idx] if idx < len(weights) else 1.0 / self.num_instances)
+                masked_weights.append(weights[idx] if idx < len(weights) else 1.0 / n)
 
         total_masked_weight = sum(masked_weights)
         if total_masked_weight > 0:
             effective_weights = [w / total_masked_weight for w in masked_weights]
         else:
-            # Emergency: All nodes overloaded -> Fallback to least connections among healthy
-            return self._select_least_connections(queue_list, masked=True), "fallback_all_masked_least_conn", [0.2] * self.num_instances
+            # Emergency: all nodes overloaded -> least connections over the whole fleet
+            return self._select_least_connections(queue_list), "fallback_all_masked_least_conn", [1.0 / n] * n
 
         # Strategy Dispatcher
         if strategy == "lin_ts":
-            chosen_idx = random.choices(range(self.num_instances), weights=effective_weights, k=1)[0]
+            chosen_idx = random.choices(range(n), weights=effective_weights, k=1)[0]
             return chosen_idx, "rl_adaptive_lin_ts", effective_weights
 
         elif strategy == "least_conn":
-            chosen_idx = self._select_least_connections(queue_list, masked=False, masked_weights=masked_weights)
+            chosen_idx = self._select_least_connections(queue_list, masked_weights=masked_weights)
             return chosen_idx, "baseline_least_connections", effective_weights
 
         elif strategy == "p2c":
@@ -74,19 +98,17 @@ class RoutingEngine:
 
         else:
             # Default fallback to LinTS
-            chosen_idx = random.choices(range(self.num_instances), weights=effective_weights, k=1)[0]
+            chosen_idx = random.choices(range(n), weights=effective_weights, k=1)[0]
             return chosen_idx, "rl_adaptive_lin_ts", effective_weights
 
-    def _select_least_connections(self, queue_list: List[int], masked: bool = False, masked_weights: List[float] = None) -> int:
-        """Selects backend with lowest active queue depth."""
-        valid_indices = []
-        for idx, q in enumerate(queue_list):
-            if not masked and masked_weights and masked_weights[idx] == 0.0:
-                continue
-            valid_indices.append(idx)
-            
+    def _select_least_connections(self, queue_list: List[int], masked_weights: List[float] = None) -> int:
+        """Selects backend with lowest active queue depth among unmasked nodes."""
+        valid_indices = [
+            idx for idx in range(len(queue_list))
+            if not masked_weights or masked_weights[idx] > 0.0
+        ]
         if not valid_indices:
-            valid_indices = list(range(self.num_instances))
+            valid_indices = list(range(len(queue_list)))
 
         min_q = min(queue_list[i] for i in valid_indices)
         best_candidates = [i for i in valid_indices if queue_list[i] == min_q]
@@ -96,36 +118,33 @@ class RoutingEngine:
         """P2C algorithm: Samples two random unmasked nodes and picks the one with fewer connections."""
         valid_indices = [i for i, w in enumerate(masked_weights) if w > 0.0]
         if not valid_indices:
-            valid_indices = list(range(self.num_instances))
-            
+            valid_indices = list(range(len(masked_weights)))
+
         if len(valid_indices) == 1:
             return valid_indices[0]
-            
-        # Sample 2 distinct candidates
+
         c1, c2 = random.sample(valid_indices, 2)
-        if queue_list[c1] <= queue_list[c2]:
-            return c1
-        else:
-            return c2
+        return c1 if queue_list[c1] <= queue_list[c2] else c2
 
     def _select_round_robin(self, masked_weights: List[float]) -> int:
         """Sequential round robin across available nodes."""
+        n = len(masked_weights)
         with self._lock:
-            for _ in range(self.num_instances):
-                idx = self._rr_counter % self.num_instances
+            for _ in range(n):
+                idx = self._rr_counter % n
                 self._rr_counter += 1
                 if masked_weights[idx] > 0.0:
                     return idx
             # If all masked
-            idx = self._rr_counter % self.num_instances
+            idx = self._rr_counter % n
             self._rr_counter += 1
             return idx
 
     def _select_weighted_round_robin(self, masked_weights: List[float]) -> int:
         """Stochastic selection using static capacity weights combined with action masks."""
-        combined_weights = [self.capacity_weights[i] if masked_weights[i] > 0.0 else 0.0 for i in range(self.num_instances)]
-        total = sum(combined_weights)
-        if total > 0:
-            normalized = [w / total for w in combined_weights]
-            return random.choices(range(self.num_instances), weights=normalized, k=1)[0]
+        n = len(masked_weights)
+        cap = self.capacity_weights(n)
+        combined_weights = [cap[i] if masked_weights[i] > 0.0 else 0.0 for i in range(n)]
+        if sum(combined_weights) > 0:
+            return random.choices(range(n), weights=combined_weights, k=1)[0]
         return self._select_round_robin(masked_weights)
