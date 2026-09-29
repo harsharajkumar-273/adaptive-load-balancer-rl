@@ -348,18 +348,56 @@ $\rho=0.9$ (3.9\,s at 0.95).
 \subsection{Real-system validation}
 \label{sec:eval-real}
 \TODO{Fill from research/results/realsys.csv: K gateway processes (src/gateway.py)
-sharing one Redis, 8 FIFO backend processes, open-loop Poisson load; 5$\times$
+sharing one Redis, 8 FIFO backend processes, open-loop Poisson load; 10$\times$
 slower time scale than the simulator; nominal $\rho=0.8$.}
 
 % ---------------------------------------------------------------------------
 \section{Related Work}
-\TODO{Author must complete after reading: multi-dispatcher load balancing with
-stale or local information \citep{zhou2020multidispatcher,goren2021stochastic};
-old-information results \citep{mitzenmacher2000old,dahlin2000stale};
-power of $d$ choices \citep{mitzenmacher2001power}; replica selection \citep{c3nsdi2015};
-probing \citep{prequal2024}; learned and LLM routers \citep{lodestar2026,llmd,vllmrouter};
-multi-player bandits \citep{multiplayerbandit2025}.
-State precisely how each differs from this work.}
+\TODO{DRAFT written without access to the full papers. Verify every claim
+below against the sources, and search for missing work, before submission.}
+
+\paragraph{Load balancing with old information.} Mitzenmacher showed that
+greedy shortest-queue routing on periodically updated information herds, and
+that choosing among a few random candidates is robust to
+staleness~\citep{mitzenmacher2000old}. Dahlin proposed interpreting stale load
+information using its age~\citep{dahlin2000stale}. We show that learned
+routers inherit, and amplify, the greedy failure mode. The power-of-$d$
+remedy still applies, now as a filter in front of a learned score.
+
+\paragraph{Multiple dispatchers.} Work on heterogeneous systems with many
+dispatchers studies herding when dispatchers act on shared or local
+information, and proposes stochastic coordination among
+dispatchers~\citep{zhou2020multidispatcher,goren2021stochastic}. These works
+analyse queue-length-based policies. We study policies whose inputs include a
+model learned independently by each dispatcher. We identify
+cross-dispatcher agreement of learned models as a herding mechanism, and
+posterior disagreement as a partial remedy. \TODO{check whether these papers
+already cover learned or estimated service rates.}
+
+\paragraph{Power of $d$ choices.} Sampling $d$ servers and joining the
+shortest queue exponentially improves on random assignment~\citep{mitzenmacher2001power}.
+Our learned variant replaces the queue-length comparison with a learned
+latency prediction. This handles heterogeneous and drifting servers, which
+plain JSQ($d$) ignores (\cref{fig:frontier}).
+
+\paragraph{Replica selection and probing.} C3 ranks replicas by
+server-reported feedback with rate control~\citep{c3nsdi2015}. Prequal probes
+replicas asynchronously for requests-in-flight and latency, and selects with a
+hot--cold rule~\citep{prequal2024}. We compare against a re-implementation of
+Prequal at equal probe budgets, and we show that without probing,
+learned power-of-$d$ on stale shared state beats Prequal limited to one probe
+per request.
+
+\paragraph{Learned and LLM-serving routers.} Routers for LLM inference score
+replicas by predicted prefix-cache reuse and load, and run as horizontally
+scaled
+services~\citep{llmd,vllmrouter}. Online-learning routers adapt routing from
+observed latency~\citep{lodestar2026}. Multi-player bandit formulations study
+several learners sharing arms~\citep{multiplayerbandit2025}. \TODO{state
+precisely how each differs; in particular whether Lodestar evaluates many
+router replicas.} Our results suggest these routers should combine learned
+scores with random candidate sampling, and should avoid long weight-publication
+intervals.
 
 \section{Limitations}
 Our backends are single-server FIFO queues and the learned model has two
@@ -368,8 +406,10 @@ ranking among learned policies. The Prequal baseline is our re-implementation
 from the paper's description and is tuned in its favour, but it is not the
 production system. Our probing variants probe synchronously; with sub-millisecond
 service times the probe round-trip, which Prequal avoids, would matter more
-than in our setting. The prototype validation uses a 5$\times$ slower time scale
-than the simulator so that Python processes keep up.
+than in our setting. The prototype runs on a 10$\times$ slower time scale than
+the simulator, at a nominal $\rho=0.8$, so that single-threaded Python gateways
+keep ample headroom. At higher load, per-request overheads measurably raise
+the effective utilisation.
 
 \section{Conclusion}
 Horizontally scaled learned routers are exposed to herding in two ways.

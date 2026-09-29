@@ -3,9 +3,10 @@ Real-system validation: K gateway processes (src/gateway.py) sharing one Redis,
 8 FIFO backend processes (src/backend_node.py --service-rate), and an
 open-loop Poisson load generator.
 
-The setup mirrors the simulator, slowed down 5x so Python processes can keep
-up: backend rates 40/40/30/30/20/20/10/10 req/s (total 200), load rho * 200.
-Simulator staleness 50 ms / 200 ms corresponds to 250 ms / 1 s here.
+The setup mirrors the simulator, slowed down 10x so that a single Python
+gateway has ample headroom: backend rates 20/20/15/15/10/10/5/5 req/s (total
+100), load rho * 100. Simulator staleness 50 ms / 200 ms corresponds to
+0.5 s / 2 s here.
 
     redis-server --daemonize yes
     python -m research.realsys                 # full grid -> research/results/realsys.csv
@@ -22,6 +23,7 @@ import csv
 import itertools
 import os
 import random
+import signal
 import subprocess
 import sys
 import time
@@ -33,7 +35,8 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS = os.path.join(ROOT, "research", "results", "realsys.csv")
 
-MUS = [40.0, 40.0, 30.0, 30.0, 20.0, 20.0, 10.0, 10.0]
+MUS = [20.0, 20.0, 15.0, 15.0, 10.0, 10.0, 5.0, 5.0]
+TIME_SCALE = 10  # relative to research/sim.py
 BACKEND_PORT = 8001
 GATEWAY_PORT = 9001
 STRATEGIES = ["least_conn", "p2c", "greedy_learned", "p2c_learned"]
@@ -126,20 +129,23 @@ def run_one(strategy: str, refresh: float, k: int, rho: float, seed: int,
 
 
 def main():
+    # Turn SIGTERM into an exception so run_one's `finally` stops child processes.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--quick", action="store_true")
-    parser.add_argument("--duration", type=float, default=30.0)
-    parser.add_argument("--warmup", type=float, default=6.0)
+    parser.add_argument("--duration", type=float, default=45.0)
+    parser.add_argument("--warmup", type=float, default=10.0)
     parser.add_argument("--seeds", type=int, default=2)
     parser.add_argument("--rho", type=float, default=0.8,
                         help="nominal load; Python overheads make the effective load a few %% higher")
     args = parser.parse_args()
 
     if args.quick:
-        grid = [(s, 0.25, 4, 0) for s in STRATEGIES]
+        grid = [(s, 0.05 * TIME_SCALE, 4, 0) for s in STRATEGIES]
         args.duration, args.warmup = 15.0, 4.0
     else:
-        grid = list(itertools.product(STRATEGIES, [0.0, 0.25, 1.0], [1, 8], range(args.seeds)))
+        refresh = [0.0, 0.05 * TIME_SCALE, 0.2 * TIME_SCALE]
+        grid = list(itertools.product(STRATEGIES, refresh, [1, 8], range(args.seeds)))
     rows = []
     for i, (strategy, refresh, k, seed) in enumerate(grid, 1):
         row = run_one(strategy, refresh, k, args.rho, seed, args.duration, args.warmup)
