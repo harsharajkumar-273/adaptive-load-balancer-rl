@@ -8,27 +8,51 @@ masking, and a staleness circuit breaker.
 Geo-routing is informational only: the estimated cross-region penalty is
 reported in a response header but is NOT added to the measured latency, so it
 never contaminates the learning signal.
+
+`create_app()` builds an independent gateway (its own state, learned model and
+probe pool), so one process can host several gateways (see
+src/gateway_pool.py). The module-level `app` is one such gateway.
+
+Strategies (VALID_STRATEGIES, set via ROUTING_STRATEGY or POST /strategy):
+snapshot-based ones read shared state from Redis every STATE_REFRESH_SEC
+seconds; a "+lc" suffix adds local correction (count this gateway's own sends
+since the last refresh). Probing ones (src/probing.py) query backends directly.
 """
+import asyncio
+import math
+import random
 import time
 import logging
 import httpx
+import numpy as np
 from typing import Dict, List, Any
-from fastapi import FastAPI, Request, Response, HTTPException, status, Body, Query, Header
+from fastapi import APIRouter, FastAPI, Request, Response, HTTPException, status, Body, Query, Header
 from src.config import (
     STALENESS_THRESHOLD_SEC,
     STATE_REFRESH_SEC,
+    STATE_REFRESH_ALIGNED,
     CPU_MASK_ENABLED,
     LEARNED_LATENCY_SCALE_SEC,
     GATEWAY_TIMEOUT_SEC,
+    GATEWAY_SEED,
+    NOMINAL_RATES,
     BACKEND_URLS,
+    BACKEND_PORT_BASE,
     SLA_LATENCY_MS,
     ROUTING_STRATEGY,
     BACKEND_SPECS,
-    NUM_INSTANCES
+    NUM_INSTANCES,
+    PREQUAL_R_PROBE,
+    PREQUAL_POOL_SIZE,
+    PREQUAL_REUSE_BUDGET,
+    PREQUAL_MAX_AGE_SEC,
+    PREQUAL_Q_RIF,
+    PROBE_TIMEOUT_SEC,
 )
 from src.shared_state import DistributedStateCache
 from src.routing_strategies import RoutingEngine, VALID_STRATEGIES, CPU_MASK_THRESHOLD
 from src.learned_routing import LEARNED_STRATEGIES, LearnedRouter
+from src.probing import PROBING_STRATEGIES, POWER_OF_D_PROBING, PrequalPool, probe
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
 from contextlib import asynccontextmanager
@@ -67,40 +91,123 @@ def get_node_url(registry: ServiceRegistry, chosen_idx: int) -> str:
                 return registry._instances[chosen_idx]["url"]
     if chosen_idx < len(BACKEND_URLS):
         return BACKEND_URLS[chosen_idx]
-    return f"http://127.0.0.1:{8001 + chosen_idx}"
+    return f"http://127.0.0.1:{BACKEND_PORT_BASE + chosen_idx}"
+
+def _refresh_due(last_read: float, now: float) -> bool:
+    if STATE_REFRESH_ALIGNED and STATE_REFRESH_SEC > 0:
+        # Every gateway refreshes at the same wall-clock boundaries.
+        return math.floor(now / STATE_REFRESH_SEC) > math.floor(last_read / STATE_REFRESH_SEC)
+    return now - last_read >= STATE_REFRESH_SEC
 
 def read_cluster_state(app: FastAPI, now: float):
     """
     Returns (weights, weights_last_update, node_metrics), re-reading Redis only
-    every STATE_REFRESH_SEC seconds (every request when it is 0).
+    every STATE_REFRESH_SEC seconds (every request when it is 0). A refresh
+    also resets the local-correction counters.
     """
     snap = app.state.state_snapshot
-    if snap is None or now - snap[0] >= STATE_REFRESH_SEC:
+    if snap is None or _refresh_due(snap[0], now):
         weights, last_update = app.state.shared_cache.get_routing_weights()
         metrics = app.state.shared_cache.get_instance_metrics()
         snap = (now, weights, last_update, metrics)
         app.state.state_snapshot = snap
+        app.state.sent_since_refresh = [0] * len(metrics["queue"])
     return snap[1], snap[2], snap[3]
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initializes connection-pooled async HTTP client, routing engine & service registry."""
-    limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000)
-    app.state.client = httpx.AsyncClient(timeout=GATEWAY_TIMEOUT_SEC, limits=limits)
-    app.state.shared_cache = getattr(app.state, "shared_cache", None) or DistributedStateCache(num_instances=NUM_INSTANCES)
-    app.state.routing_engine = RoutingEngine(
-        num_instances=NUM_INSTANCES,
-        apply_cpu_mask=CPU_MASK_ENABLED,
-        learned=LearnedRouter(latency_scale_sec=LEARNED_LATENCY_SCALE_SEC),
-    )
-    app.state.state_snapshot = None      # (read_time, weights, last_update, metrics)
-    app.state.registry = ServiceRegistry(app.state.shared_cache)
-    app.state.current_strategy = ROUTING_STRATEGY
-    app.state.circuit_breaker_tripped = None
-    yield
-    await app.state.client.aclose()
+def _gateway_rng(port_hint: int):
+    if GATEWAY_SEED is None:
+        return random.Random(), np.random.default_rng()
+    seed = int(GATEWAY_SEED) * 100_003 + port_hint
+    return random.Random(seed), np.random.default_rng(seed)
 
-app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway", lifespan=lifespan)
+def create_app(port_hint: int = 0) -> FastAPI:
+    """Builds an independent gateway. port_hint only seeds its randomness."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Initializes connection-pooled async HTTP client, routing engine & service registry."""
+        # Persistent upstream connections: expire before the backends' 300 s keep-alive.
+        limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000, keepalive_expiry=240)
+        app.state.client = httpx.AsyncClient(timeout=GATEWAY_TIMEOUT_SEC, limits=limits)
+        app.state.shared_cache = getattr(app.state, "shared_cache", None) or DistributedStateCache(num_instances=NUM_INSTANCES)
+        rng, np_rng = _gateway_rng(port_hint)
+        app.state.rng = rng
+        app.state.routing_engine = RoutingEngine(
+            num_instances=NUM_INSTANCES,
+            apply_cpu_mask=CPU_MASK_ENABLED,
+            learned=LearnedRouter(latency_scale_sec=LEARNED_LATENCY_SCALE_SEC, rng=rng, np_rng=np_rng),
+            nominal_rates=NOMINAL_RATES,
+            rng=rng,
+        )
+        app.state.prequal = PrequalPool(NUM_INSTANCES, rng, r_probe=PREQUAL_R_PROBE, pool_size=PREQUAL_POOL_SIZE,
+                                        reuse_budget=PREQUAL_REUSE_BUDGET, max_age=PREQUAL_MAX_AGE_SEC,
+                                        q_rif=PREQUAL_Q_RIF)
+        app.state.state_snapshot = None      # (read_time, weights, last_update, metrics)
+        app.state.sent_since_refresh = []
+        app.state.registry = ServiceRegistry(app.state.shared_cache)
+        app.state.current_strategy = ROUTING_STRATEGY
+        app.state.circuit_breaker_tripped = None
+        yield
+        await app.state.client.aclose()
+
+    new_app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway", lifespan=lifespan)
+    new_app.include_router(router)
+    return new_app
+
+router = APIRouter()
+
+async def choose_backend(request: Request, strategy: str, weights, cpu_list, queue_list):
+    """
+    Returns (backend index, routing mode, feature for the learned model).
+    The feature is the queue length the decision was based on.
+    """
+    st = request.app.state
+    engine = st.routing_engine
+    n = len(cpu_list)
+    if strategy in PROBING_STRATEGIES:
+        urls = {i: get_node_url(st.registry, i) for i in range(n)}
+
+    if strategy == "prequal":
+        now = time.time
+        st.prequal.spawn_probes(st.client, urls, PROBE_TIMEOUT_SEC, now, n)
+        picked = st.prequal.select(now())
+        if picked is None:
+            return st.rng.randrange(n), "prequal_empty_pool_random", 0.0
+        return picked[0], "prequal", float(picked[1])
+
+    if strategy in POWER_OF_D_PROBING:
+        d, scorer = POWER_OF_D_PROBING[strategy]
+        cands = st.rng.sample(range(n), min(d, n))
+        results = await asyncio.gather(*(probe(st.client, urls[c], PROBE_TIMEOUT_SEC) for c in cands))
+        live = {c: r[0] for c, r in zip(cands, results) if r is not None}
+        if not live:
+            return st.rng.choice(cands), f"{strategy}_probe_failed", 0.0
+        if scorer == "learned":
+            q = [live.get(i, 0) for i in range(n)]
+            chosen = engine.learned.best_of(list(live), q)
+        elif scorer == "sed":
+            chosen = min(live, key=lambda c: ((live[c] + 1) / engine.nominal_rate(c), st.rng.random()))
+        else:
+            chosen = min(live, key=lambda c: (live[c], st.rng.random()))
+        return chosen, strategy, float(live[chosen])
+
+    local_correction = strategy.endswith("+lc")
+    base = strategy[:-3] if local_correction else strategy
+    if local_correction:
+        sent = st.sent_since_refresh
+        queue_list = [q + (sent[i] if i < len(sent) else 0) for i, q in enumerate(queue_list)]
+    chosen, mode, _ = engine.select_instance(base, weights, cpu_list, queue_list)
+    if local_correction and chosen < len(st.sent_since_refresh):
+        st.sent_since_refresh[chosen] += 1
+    return chosen, mode, float(queue_list[chosen])
+
+def _is_valid_strategy(strategy: str) -> bool:
+    base = strategy[:-3] if strategy.endswith("+lc") else strategy
+    return base in VALID_STRATEGIES and not (strategy.endswith("+lc") and base in PROBING_STRATEGIES)
+
+def _learns(strategy: str) -> bool:
+    base = strategy[:-3] if strategy.endswith("+lc") else strategy
+    return base in LEARNED_STRATEGIES or base in ("p2c_learned_probe", "p3c_learned_probe")
 
 async def forward_proxy_request(
     request: Request,
@@ -143,8 +250,9 @@ async def forward_proxy_request(
     if breaker_tripped:
         chosen_idx, routing_mode, effective_weights = routing_engine.select_instance("least_conn", weights, cpu_list, queue_list)
         routing_mode = "fallback_circuit_breaker_least_conn"
+        feature = float(queue_list[chosen_idx])
     else:
-        chosen_idx, routing_mode, effective_weights = routing_engine.select_instance(active_strategy, weights, cpu_list, queue_list)
+        chosen_idx, routing_mode, feature = await choose_backend(request, active_strategy, weights, cpu_list, queue_list)
 
     # Estimated geo penalty (informational header only; never added to measured latency)
     node_region = get_node_region(request.app.state.registry, chosen_idx)
@@ -171,8 +279,8 @@ async def forward_proxy_request(
         
         breached_sla = latency_ms > SLA_LATENCY_MS
         shared_cache.record_request_outcome(chosen_idx, latency_ms, success, breached_sla)
-        if active_strategy in LEARNED_STRATEGIES:
-            routing_engine.learned.observe(chosen_idx, latency_ms / 1000.0, queue_list[chosen_idx])
+        if _learns(active_strategy):
+            routing_engine.learned.observe(chosen_idx, latency_ms / 1000.0, feature)
 
         if HAS_PROMETHEUS:
             try:
@@ -219,8 +327,8 @@ async def forward_proxy_request(
         )
 
 # Route Endpoints with Geo-Routing & QoS Tiers
-@app.get("/auth")
-@app.get("/checkout")
+@router.get("/auth")
+@router.get("/checkout")
 async def high_priority_endpoint(
     request: Request,
     response: Response,
@@ -229,7 +337,7 @@ async def high_priority_endpoint(
 ):
     return await forward_proxy_request(request, response, priority="high", strategy=strategy, client_region=x_client_region)
 
-@app.get("/play-video")
+@router.get("/play-video")
 async def medium_priority_endpoint(
     request: Request,
     response: Response,
@@ -238,8 +346,8 @@ async def medium_priority_endpoint(
 ):
     return await forward_proxy_request(request, response, priority="medium", strategy=strategy, client_region=x_client_region)
 
-@app.get("/analytics")
-@app.get("/logs")
+@router.get("/analytics")
+@router.get("/logs")
 async def low_priority_endpoint(
     request: Request,
     response: Response,
@@ -249,12 +357,12 @@ async def low_priority_endpoint(
     return await forward_proxy_request(request, response, priority="low", strategy=strategy, client_region=x_client_region)
 
 # Service Registry Endpoints
-@app.get("/registry/instances")
+@router.get("/registry/instances")
 async def get_registered_instances(request: Request):
     """Exposes all registered healthy cluster nodes."""
     return {"active_instances": request.app.state.registry.get_active_instances()}
 
-@app.post("/registry/register")
+@router.post("/registry/register")
 async def register_instance(
     request: Request,
     node_idx: int = Body(..., embed=True),
@@ -268,14 +376,14 @@ async def register_instance(
     info = registry.register_instance(node_idx=node_idx, name=name, host=host, port=port, region=region)
     return {"status": "registered", "instance": info}
 
-@app.post("/registry/deregister")
+@router.post("/registry/deregister")
 async def deregister_instance(request: Request, node_idx: int = Body(..., embed=True)):
     """Deregisters a microservice node from the cluster."""
     registry = request.app.state.registry
     success = registry.deregister_instance(node_idx)
     return {"status": "deregistered" if success else "not_found", "node_idx": node_idx}
 
-@app.get("/explain-routing")
+@router.get("/explain-routing")
 async def explain_routing(request: Request):
     """AI & Routing Explainability Audit Endpoint."""
     shared_cache = request.app.state.shared_cache
@@ -317,7 +425,7 @@ async def explain_routing(request: Request):
         "candidate_evaluations": candidates
     }
 
-@app.post("/chaos/inject")
+@router.post("/chaos/inject")
 async def inject_chaos(
     request: Request,
     node_idx: int = Query(..., ge=0),
@@ -336,7 +444,7 @@ async def inject_chaos(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to inject chaos on Node {node_idx + 1}: {str(e)}")
 
-@app.post("/chaos/clear")
+@router.post("/chaos/clear")
 async def clear_chaos(request: Request):
     """Clears all injected chaos faults across the cluster."""
     http_client = request.app.state.client
@@ -351,20 +459,22 @@ async def clear_chaos(request: Request):
             logger.warning("Failed to clear chaos on Node-%d", idx + 1, exc_info=True)
     return {"status": "all_cleared", "nodes": results}
 
-@app.post("/strategy")
+@router.post("/strategy")
 async def set_strategy(request: Request, strategy: str = Body(..., embed=True)):
     """Dynamically switches the active load balancing strategy at runtime."""
     strat = strategy.lower()
-    if strat not in VALID_STRATEGIES:
+    if not _is_valid_strategy(strat):
         raise HTTPException(status_code=400, detail=f"Invalid strategy. Choose from: {VALID_STRATEGIES}")
     
     request.app.state.current_strategy = strat
     return {"status": "updated", "current_strategy": strat}
 
-@app.get("/metrics")
+@router.get("/metrics")
 async def get_metrics(request: Request):
     """Exposes Prometheus exposition formatted metrics payload."""
     shared_cache = request.app.state.shared_cache
     telemetry = shared_cache.get_telemetry()
     content, content_type = generate_prometheus_metrics(telemetry, qos_shed_counts)
     return Response(content=content, media_type=content_type)
+
+app = create_app()

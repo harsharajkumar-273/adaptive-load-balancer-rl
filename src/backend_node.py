@@ -20,11 +20,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
 from src.config import BACKEND_SPECS, MAX_INSTANCES
-
-logger = logging.getLogger(__name__)
 from src.shared_state import DistributedStateCache
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -61,6 +61,14 @@ lock = asyncio.Lock()
 service_rate: float = None
 fifo_worker = asyncio.Lock()   # asyncio.Lock wakes waiters in FIFO order
 QUEUE_MODE_CPU = 5.0           # CPU is not modelled in queueing mode
+# Gray failure (queueing mode): from this wall-clock time on, serve at
+# service_rate * slowdown_factor. Nothing announces it.
+slowdown_epoch: float = None
+slowdown_factor: float = 1.0
+# Probe support: EWMA of latency per queue slot, latency / (RIF at arrival + 1),
+# so a probe can report the expected latency at the current RIF.
+PER_SLOT_EWMA = 0.1
+per_slot_latency: float = 0.0
 
 def calculate_cpu():
     """Simulates CPU utilization based on active connection depth & chaos injection."""
@@ -158,15 +166,24 @@ async def do_work(response: Response):
         "active_connections": active_connections
     }
 
+def _current_service_rate() -> float:
+    if slowdown_epoch is not None and time.time() >= slowdown_epoch:
+        return service_rate * slowdown_factor
+    return service_rate
+
+
 async def _serve_fifo():
-    global active_connections
+    global active_connections, per_slot_latency
     arrived = time.time()
+    rif_at_arrival = active_connections
     active_connections += 1
     if cache:
         cache.record_node_heartbeat(node_idx, QUEUE_MODE_CPU, active_connections)
     async with fifo_worker:
-        await asyncio.sleep(random.expovariate(service_rate))
+        await asyncio.sleep(random.expovariate(_current_service_rate()))
     active_connections -= 1
+    sample = (time.time() - arrived) / (rif_at_arrival + 1)
+    per_slot_latency = sample if per_slot_latency == 0.0 else per_slot_latency + PER_SLOT_EWMA * (sample - per_slot_latency)
     if cache:
         cache.record_node_heartbeat(node_idx, QUEUE_MODE_CPU, active_connections)
     return {
@@ -175,6 +192,12 @@ async def _serve_fifo():
         "processed_latency_ms": round((time.time() - arrived) * 1000.0, 2),
         "active_connections": active_connections,
     }
+
+@app.get("/probe")
+async def probe():
+    """O(1) probe: requests in flight and the expected latency at that RIF (seconds)."""
+    return {"rif": active_connections, "latency_est": per_slot_latency * (active_connections + 1)}
+
 
 @app.post("/chaos/inject")
 async def inject_chaos(
@@ -218,10 +241,16 @@ if __name__ == "__main__":
     parser.add_argument("--node-idx", type=int, required=True, help="Index of this node (0-9)")
     parser.add_argument("--service-rate", type=float, default=None,
                         help="Queueing mode: single FIFO worker, exponential service at this rate (req/s)")
+    parser.add_argument("--slowdown-epoch", type=float, default=None,
+                        help="Queueing mode: wall-clock time (epoch seconds) at which a gray failure starts")
+    parser.add_argument("--slowdown-factor", type=float, default=1.0,
+                        help="Queueing mode: service-rate multiplier after --slowdown-epoch")
     args = parser.parse_args()
 
     node_idx = args.node_idx
     service_rate = args.service_rate
+    slowdown_epoch = args.slowdown_epoch
+    slowdown_factor = args.slowdown_factor
     
     # Handle dynamic spec generation for autoscaled nodes (node-idx >= 5)
     if node_idx < len(BACKEND_SPECS):
@@ -242,4 +271,5 @@ if __name__ == "__main__":
     registry = ServiceRegistry(cache)
     
     print(f"[Node] Starting {spec['name']} on port {args.port}...")
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+    # Long keep-alive: gateways hold persistent connections (clients expire theirs first).
+    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning", timeout_keep_alive=300)

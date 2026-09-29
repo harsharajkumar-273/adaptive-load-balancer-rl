@@ -12,8 +12,11 @@ routed the request. This is the same model the simulator in research/ uses.
 
 Strategies
   greedy_learned  send to the backend with the lowest predicted latency
+  ts_learned      Thompson sampling: lowest latency under a posterior sample,
+                  drawn per request
   p2c_learned     sample two backends, send to the lower predicted latency
                   (the herding-resistant variant; see research/README.md)
+  p3c_learned     the same with three sampled backends
 """
 import math
 import random
@@ -22,7 +25,8 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
-LEARNED_STRATEGIES = ["greedy_learned", "p2c_learned"]
+LEARNED_STRATEGIES = ["greedy_learned", "ts_learned", "p2c_learned", "p3c_learned"]
+_SAMPLE_SIZE = {"p2c_learned": 2, "p3c_learned": 3}
 
 
 class LatencyModel:
@@ -82,20 +86,31 @@ class LatencyModel:
 class LearnedRouter:
     """Thread-safe wrapper used by the gateway: pick a backend, then learn from the outcome."""
 
-    def __init__(self, latency_scale_sec: float = 0.025, rng: Optional[random.Random] = None):
+    def __init__(self, latency_scale_sec: float = 0.025, rng: Optional[random.Random] = None,
+                 np_rng: Optional[np.random.Generator] = None):
         self.latency_scale_sec = latency_scale_sec
         self.model = LatencyModel(0)
         self.rng = rng or random.Random()
+        self.np_rng = np_rng or np.random.default_rng()
         self._lock = threading.Lock()
 
     def select(self, strategy: str, queue_list: List[int], eligible: List[int]) -> int:
         with self._lock:
             self.model.ensure_size(len(queue_list))
-            if strategy == "p2c_learned" and len(eligible) >= 2:
-                cands = self.rng.sample(eligible, 2)
+            if strategy == "ts_learned":
+                sample = self.model.predict_sample(queue_list, self.np_rng)
+                return min(eligible, key=lambda s: sample[s])
+            d = _SAMPLE_SIZE.get(strategy)
+            if d is not None and len(eligible) >= d:
+                cands = self.rng.sample(eligible, d)
             else:
                 cands = list(eligible)
-            return min(cands, key=lambda s: (self.model.predict(s, queue_list[s]), self.rng.random()))
+            return self.best_of(cands, queue_list)
+
+    def best_of(self, cands: Sequence[int], queue_list: Sequence[float]) -> int:
+        """Candidate with the lowest posterior-mean predicted latency (random tie-break)."""
+        self.model.ensure_size(len(queue_list))
+        return min(cands, key=lambda s: (self.model.predict(s, queue_list[s]), self.rng.random()))
 
     def observe(self, s: int, latency_sec: float, queue_seen: float) -> None:
         with self._lock:

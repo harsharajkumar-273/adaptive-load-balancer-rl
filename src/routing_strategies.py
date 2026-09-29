@@ -15,6 +15,7 @@ import threading
 from typing import List, Tuple, Optional
 from src.config import BACKEND_SPECS
 from src.learned_routing import LEARNED_STRATEGIES, LearnedRouter
+from src.probing import PROBING_STRATEGIES
 
 # Nodes whose CPU exceeds this are masked out (weight 0) when masking is enabled.
 CPU_MASK_THRESHOLD = 85.0
@@ -22,7 +23,8 @@ CPU_MASK_THRESHOLD = 85.0
 # (matches the spec generated in backend_node.py).
 DEFAULT_AUTOSCALED_CAPACITY = 100.0
 
-VALID_STRATEGIES = ["lin_ts", "least_conn", "p2c", "round_robin", "weighted_round_robin"] + LEARNED_STRATEGIES
+VALID_STRATEGIES = (["lin_ts", "least_conn", "sed", "p2c", "round_robin", "weighted_round_robin"]
+                    + LEARNED_STRATEGIES + PROBING_STRATEGIES)
 
 
 def node_capacity(idx: int) -> float:
@@ -33,14 +35,23 @@ def node_capacity(idx: int) -> float:
 
 class RoutingEngine:
     def __init__(self, num_instances: Optional[int] = None, apply_cpu_mask: bool = True,
-                 learned: Optional[LearnedRouter] = None):
+                 learned: Optional[LearnedRouter] = None, nominal_rates: Optional[List[float]] = None,
+                 rng: Optional[random.Random] = None):
         # num_instances is kept for backwards compatibility; the effective fleet
         # size is always len(cpu_list) at call time.
         self.num_instances = num_instances
         self.apply_cpu_mask = apply_cpu_mask
         self.learned = learned or LearnedRouter()
+        self.nominal_rates = list(nominal_rates or [])
+        self.rng = rng or random.Random()
         self._rr_counter = 0
         self._lock = threading.Lock()
+
+    def nominal_rate(self, idx: int) -> float:
+        """Nominal service rate of a backend (configured rates, else its capacity spec)."""
+        if idx < len(self.nominal_rates):
+            return self.nominal_rates[idx]
+        return node_capacity(idx)
 
     def capacity_weights(self, n: int) -> List[float]:
         capacities = [node_capacity(i) for i in range(n)]
@@ -80,7 +91,7 @@ class RoutingEngine:
 
         # Strategy Dispatcher
         if strategy == "lin_ts":
-            chosen_idx = random.choices(range(n), weights=effective_weights, k=1)[0]
+            chosen_idx = self.rng.choices(range(n), weights=effective_weights, k=1)[0]
             return chosen_idx, "rl_adaptive_lin_ts", effective_weights
 
         elif strategy == "least_conn":
@@ -99,6 +110,12 @@ class RoutingEngine:
             chosen_idx = self._select_weighted_round_robin(masked_weights)
             return chosen_idx, "baseline_weighted_round_robin", effective_weights
 
+        elif strategy == "sed":
+            eligible = [i for i, w in enumerate(masked_weights) if w > 0.0]
+            rates = [self.nominal_rate(i) for i in range(n)]
+            chosen_idx = min(eligible, key=lambda i: ((queue_list[i] + 1) / rates[i], self.rng.random()))
+            return chosen_idx, "baseline_shortest_expected_delay", effective_weights
+
         elif strategy in LEARNED_STRATEGIES:
             eligible = [i for i, w in enumerate(masked_weights) if w > 0.0]
             chosen_idx = self.learned.select(strategy, queue_list, eligible)
@@ -106,7 +123,7 @@ class RoutingEngine:
 
         else:
             # Default fallback to LinTS
-            chosen_idx = random.choices(range(n), weights=effective_weights, k=1)[0]
+            chosen_idx = self.rng.choices(range(n), weights=effective_weights, k=1)[0]
             return chosen_idx, "rl_adaptive_lin_ts", effective_weights
 
     def _select_least_connections(self, queue_list: List[int], masked_weights: List[float] = None) -> int:
@@ -120,7 +137,7 @@ class RoutingEngine:
 
         min_q = min(queue_list[i] for i in valid_indices)
         best_candidates = [i for i in valid_indices if queue_list[i] == min_q]
-        return random.choice(best_candidates)
+        return self.rng.choice(best_candidates)
 
     def _select_power_of_two_choices(self, queue_list: List[int], masked_weights: List[float]) -> int:
         """P2C algorithm: Samples two random unmasked nodes and picks the one with fewer connections."""
@@ -131,7 +148,7 @@ class RoutingEngine:
         if len(valid_indices) == 1:
             return valid_indices[0]
 
-        c1, c2 = random.sample(valid_indices, 2)
+        c1, c2 = self.rng.sample(valid_indices, 2)
         return c1 if queue_list[c1] <= queue_list[c2] else c2
 
     def _select_round_robin(self, masked_weights: List[float]) -> int:
@@ -154,5 +171,5 @@ class RoutingEngine:
         cap = self.capacity_weights(n)
         combined_weights = [cap[i] if masked_weights[i] > 0.0 else 0.0 for i in range(n)]
         if sum(combined_weights) > 0:
-            return random.choices(range(n), weights=combined_weights, k=1)[0]
+            return self.rng.choices(range(n), weights=combined_weights, k=1)[0]
         return self._select_round_robin(masked_weights)

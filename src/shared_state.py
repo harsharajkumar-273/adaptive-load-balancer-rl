@@ -73,6 +73,12 @@ class MockRedis:
             self._db[key] = str(new_val)
             return new_val
 
+    def mset(self, mapping: Dict[str, Any]) -> bool:
+        with self._lock:
+            for k, v in mapping.items():
+                self._db[k] = str(v)
+            return True
+
     def mget(self, keys: List[str]) -> List[Optional[bytes]]:
         return [self.get(k) for k in keys]
 
@@ -216,9 +222,11 @@ class DistributedStateCache:
     def record_node_heartbeat(self, node_idx: int, cpu: float, queue: int):
         """Called by independent backend node processes to register their load metrics."""
         try:
-            self.client.set(f"node:{node_idx}:cpu", str(cpu))
-            self.client.set(f"node:{node_idx}:queue", str(queue))
-            self.client.set(f"node:{node_idx}:last_seen", str(time.time()))
+            self.client.mset({
+                f"node:{node_idx}:cpu": str(cpu),
+                f"node:{node_idx}:queue": str(queue),
+                f"node:{node_idx}:last_seen": str(time.time()),
+            })
         except Exception:
             logger.warning("Failed to record heartbeat for node %d", node_idx, exc_info=True)
 
