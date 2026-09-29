@@ -43,3 +43,11 @@ env/
 # Local Simulation Telemetry & Checkpoints
 stdout.log
 model_checkpoint.npz
+
+# LaTeX build outputs
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.pdf

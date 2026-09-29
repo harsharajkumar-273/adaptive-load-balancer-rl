@@ -76,3 +76,37 @@ def test_overloaded_gray_scenario_is_rejected():
     sc = Scenario(rho=0.9, gray_server=0, **SHORT)  # capacity 1000 -> 840 < 900 offered
     with pytest.raises(ValueError):
         simulate(sc, "p2c", seed=0)
+
+
+def test_desync_refresh_reduces_stale_jsq_herding():
+    sync = simulate(Scenario(staleness=0.2, num_dispatchers=16, **SHORT), "jsq", seed=0)
+    desync = simulate(Scenario(staleness=0.2, num_dispatchers=16, desync=True, **SHORT), "jsq", seed=0)
+    assert desync["fano"] < sync["fano"] / 2
+
+
+def test_heavy_tailed_service_keeps_mean_and_raises_tail():
+    base = Scenario(rho=0.5, staleness=0.0, num_dispatchers=1, duration=60.0, warmup=2.0)
+    heavy = Scenario(rho=0.5, staleness=0.0, num_dispatchers=1, duration=60.0, warmup=2.0, service_cv=4.0)
+    a, b = simulate(base, "wrandom", seed=0), simulate(heavy, "wrandom", seed=0)
+    assert b["p999_ms"] > a["p999_ms"]
+
+
+def test_bursty_arrivals_keep_mean_rate():
+    long = dict(duration=200.0, warmup=1.0, rho=0.5, staleness=0.0, num_dispatchers=1)
+    base = simulate(Scenario(**long), "wrandom", seed=0)
+    bursty = simulate(Scenario(burstiness=0.5, **long), "wrandom", seed=0)
+    assert bursty["requests"] == pytest.approx(base["requests"], rel=0.05)
+
+
+def test_prequal_uses_its_probe_budget_and_ignores_snapshot_staleness():
+    fresh = simulate(Scenario(staleness=0.0, num_dispatchers=4, **SHORT), "prequal", seed=0)
+    stale = simulate(Scenario(staleness=0.2, num_dispatchers=4, **SHORT), "prequal", seed=0)
+    assert fresh["probes_per_request"] == pytest.approx(3.0, abs=0.01)
+    assert fresh["p99_ms"] == stale["p99_ms"]
+
+
+def test_synchronous_probing_is_charged_its_round_trip():
+    sc = Scenario(rho=0.1, staleness=0.0, num_dispatchers=1, **SHORT)
+    probe = simulate(sc, "p2c_learned_probe", seed=0)
+    assert probe["probes_per_request"] == pytest.approx(2.0)
+    assert probe["p50_ms"] >= 0.5  # at least one 0.5 ms probe round-trip

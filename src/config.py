@@ -86,7 +86,7 @@ def _get_dict(source, key):
 
 # Cluster Settings
 _cluster = _get_dict(_yaml_config, "cluster")
-NUM_INSTANCES = int(_cluster.get("num_instances", 5))
+NUM_INSTANCES = int(os.environ.get("NUM_INSTANCES", _cluster.get("num_instances", 5)))
 # Upper bound on fleet size (autoscaler ceiling). The live fleet size is
 # discovered from node heartbeats and always lies in [NUM_INSTANCES, MAX_INSTANCES].
 MAX_INSTANCES = int(os.environ.get("MAX_INSTANCES", _cluster.get("max_instances", 10)))
@@ -94,6 +94,17 @@ PORT = int(os.environ.get("PORT", _cluster.get("port", 8000)))
 HOST = os.environ.get("HOST", _cluster.get("host", "0.0.0.0"))
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", _cluster.get("checkpoint_path", "model_checkpoint.npz"))
 ROUTING_STRATEGY = os.environ.get("ROUTING_STRATEGY", str(_cluster.get("routing_strategy", "lin_ts"))).lower()
+# How often a gateway re-reads backend state from Redis (0 = on every request).
+# Real gateways poll shared state periodically; this makes that staleness explicit.
+STATE_REFRESH_SEC = float(os.environ.get("STATE_REFRESH_SEC", _cluster.get("state_refresh_sec", 0.0)))
+# Mask nodes above 85% CPU (disable for routing experiments).
+CPU_MASK_ENABLED = os.environ.get("CPU_MASK", str(_cluster.get("cpu_mask", "true"))).lower() == "true"
+# Upstream request timeout at the gateway. Timed-out requests fail over to another
+# backend while the original stays queued, so a short timeout under overload
+# multiplies load (retry storm). Raise it for routing experiments.
+GATEWAY_TIMEOUT_SEC = float(os.environ.get("GATEWAY_TIMEOUT_SEC", 4.0))
+# Latency unit for the per-gateway learned model (seconds).
+LEARNED_LATENCY_SCALE_SEC = float(os.environ.get("LEARNED_LATENCY_SCALE_SEC", 0.025))
 
 # Redis Shared Cache Settings
 _redis = _get_dict(_yaml_config, "redis")

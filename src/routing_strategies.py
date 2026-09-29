@@ -14,6 +14,7 @@ import random
 import threading
 from typing import List, Tuple, Optional
 from src.config import BACKEND_SPECS
+from src.learned_routing import LEARNED_STRATEGIES, LearnedRouter
 
 # Nodes whose CPU exceeds this are masked out (weight 0) when masking is enabled.
 CPU_MASK_THRESHOLD = 85.0
@@ -21,7 +22,7 @@ CPU_MASK_THRESHOLD = 85.0
 # (matches the spec generated in backend_node.py).
 DEFAULT_AUTOSCALED_CAPACITY = 100.0
 
-VALID_STRATEGIES = ["lin_ts", "least_conn", "p2c", "round_robin", "weighted_round_robin"]
+VALID_STRATEGIES = ["lin_ts", "least_conn", "p2c", "round_robin", "weighted_round_robin"] + LEARNED_STRATEGIES
 
 
 def node_capacity(idx: int) -> float:
@@ -31,11 +32,13 @@ def node_capacity(idx: int) -> float:
 
 
 class RoutingEngine:
-    def __init__(self, num_instances: Optional[int] = None, apply_cpu_mask: bool = True):
+    def __init__(self, num_instances: Optional[int] = None, apply_cpu_mask: bool = True,
+                 learned: Optional[LearnedRouter] = None):
         # num_instances is kept for backwards compatibility; the effective fleet
         # size is always len(cpu_list) at call time.
         self.num_instances = num_instances
         self.apply_cpu_mask = apply_cpu_mask
+        self.learned = learned or LearnedRouter()
         self._rr_counter = 0
         self._lock = threading.Lock()
 
@@ -95,6 +98,11 @@ class RoutingEngine:
         elif strategy == "weighted_round_robin":
             chosen_idx = self._select_weighted_round_robin(masked_weights)
             return chosen_idx, "baseline_weighted_round_robin", effective_weights
+
+        elif strategy in LEARNED_STRATEGIES:
+            eligible = [i for i, w in enumerate(masked_weights) if w > 0.0]
+            chosen_idx = self.learned.select(strategy, queue_list, eligible)
+            return chosen_idx, strategy, effective_weights
 
         else:
             # Default fallback to LinTS

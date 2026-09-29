@@ -16,6 +16,10 @@ from typing import Dict, List, Any
 from fastapi import FastAPI, Request, Response, HTTPException, status, Body, Query, Header
 from src.config import (
     STALENESS_THRESHOLD_SEC,
+    STATE_REFRESH_SEC,
+    CPU_MASK_ENABLED,
+    LEARNED_LATENCY_SCALE_SEC,
+    GATEWAY_TIMEOUT_SEC,
     BACKEND_URLS,
     SLA_LATENCY_MS,
     ROUTING_STRATEGY,
@@ -24,6 +28,7 @@ from src.config import (
 )
 from src.shared_state import DistributedStateCache
 from src.routing_strategies import RoutingEngine, VALID_STRATEGIES, CPU_MASK_THRESHOLD
+from src.learned_routing import LEARNED_STRATEGIES, LearnedRouter
 from src.registry import ServiceRegistry
 from src.chaos import chaos_manager
 from contextlib import asynccontextmanager
@@ -64,13 +69,31 @@ def get_node_url(registry: ServiceRegistry, chosen_idx: int) -> str:
         return BACKEND_URLS[chosen_idx]
     return f"http://127.0.0.1:{8001 + chosen_idx}"
 
+def read_cluster_state(app: FastAPI, now: float):
+    """
+    Returns (weights, weights_last_update, node_metrics), re-reading Redis only
+    every STATE_REFRESH_SEC seconds (every request when it is 0).
+    """
+    snap = app.state.state_snapshot
+    if snap is None or now - snap[0] >= STATE_REFRESH_SEC:
+        weights, last_update = app.state.shared_cache.get_routing_weights()
+        metrics = app.state.shared_cache.get_instance_metrics()
+        snap = (now, weights, last_update, metrics)
+        app.state.state_snapshot = snap
+    return snap[1], snap[2], snap[3]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initializes connection-pooled async HTTP client, routing engine & service registry."""
     limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000)
-    app.state.client = httpx.AsyncClient(timeout=4.0, limits=limits)
+    app.state.client = httpx.AsyncClient(timeout=GATEWAY_TIMEOUT_SEC, limits=limits)
     app.state.shared_cache = getattr(app.state, "shared_cache", None) or DistributedStateCache(num_instances=NUM_INSTANCES)
-    app.state.routing_engine = RoutingEngine(num_instances=NUM_INSTANCES)
+    app.state.routing_engine = RoutingEngine(
+        num_instances=NUM_INSTANCES,
+        apply_cpu_mask=CPU_MASK_ENABLED,
+        learned=LearnedRouter(latency_scale_sec=LEARNED_LATENCY_SCALE_SEC),
+    )
+    app.state.state_snapshot = None      # (read_time, weights, last_update, metrics)
     app.state.registry = ServiceRegistry(app.state.shared_cache)
     app.state.current_strategy = ROUTING_STRATEGY
     app.state.circuit_breaker_tripped = None
@@ -94,11 +117,10 @@ async def forward_proxy_request(
     active_strategy = strategy.lower() if strategy else request.app.state.current_strategy
     current_time = time.time()
     
-    weights, last_update = shared_cache.get_routing_weights()
-    metrics = shared_cache.get_instance_metrics()
+    weights, last_update, metrics = read_cluster_state(request.app, current_time)
     cpu_list = metrics["cpu"]
     queue_list = metrics["queue"]
-    
+
     # Adaptive Traffic Shaping (QoS Load Shedding under heavy cluster load)
     avg_cpu = sum(cpu_list) / max(1, len(cpu_list))
     if avg_cpu > 80.0 and priority == "low":
@@ -149,7 +171,9 @@ async def forward_proxy_request(
         
         breached_sla = latency_ms > SLA_LATENCY_MS
         shared_cache.record_request_outcome(chosen_idx, latency_ms, success, breached_sla)
-        
+        if active_strategy in LEARNED_STRATEGIES:
+            routing_engine.learned.observe(chosen_idx, latency_ms / 1000.0, queue_list[chosen_idx])
+
         if HAS_PROMETHEUS:
             try:
                 PROM_REQUEST_LATENCY.labels(

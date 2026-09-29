@@ -56,6 +56,11 @@ cpu_utilization: float = 5.0
 cache: DistributedStateCache = None
 registry: ServiceRegistry = None
 lock = asyncio.Lock()
+# Queueing mode (--service-rate): a single FIFO worker with exponential service
+# times, i.e. a real M/M/1-style server for routing experiments.
+service_rate: float = None
+fifo_worker = asyncio.Lock()   # asyncio.Lock wakes waiters in FIFO order
+QUEUE_MODE_CPU = 5.0           # CPU is not modelled in queueing mode
 
 def calculate_cpu():
     """Simulates CPU utilization based on active connection depth & chaos injection."""
@@ -118,7 +123,10 @@ async def do_work(response: Response):
     Simulates latency and load by sleeping asynchronously.
     """
     global active_connections, cpu_utilization, node_idx, cache
-    
+
+    if service_rate:
+        return await _serve_fifo()
+
     async with lock:
         active_connections += 1
         
@@ -150,6 +158,24 @@ async def do_work(response: Response):
         "active_connections": active_connections
     }
 
+async def _serve_fifo():
+    global active_connections
+    arrived = time.time()
+    active_connections += 1
+    if cache:
+        cache.record_node_heartbeat(node_idx, QUEUE_MODE_CPU, active_connections)
+    async with fifo_worker:
+        await asyncio.sleep(random.expovariate(service_rate))
+    active_connections -= 1
+    if cache:
+        cache.record_node_heartbeat(node_idx, QUEUE_MODE_CPU, active_connections)
+    return {
+        "status": "success",
+        "node_idx": node_idx,
+        "processed_latency_ms": round((time.time() - arrived) * 1000.0, 2),
+        "active_connections": active_connections,
+    }
+
 @app.post("/chaos/inject")
 async def inject_chaos(
     fault_type: str = Body("cpu_spike", embed=True),
@@ -175,7 +201,7 @@ async def heartbeat_loop():
     await asyncio.sleep(1.0)
     while True:
         try:
-            cpu = calculate_cpu()
+            cpu = QUEUE_MODE_CPU if service_rate else calculate_cpu()
             if cache:
                 cache.record_node_heartbeat(node_idx, cpu, active_connections)
             if registry:
@@ -190,9 +216,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Distributed Backend Cluster Node")
     parser.add_argument("--port", type=int, required=True, help="Port to run the node on")
     parser.add_argument("--node-idx", type=int, required=True, help="Index of this node (0-9)")
+    parser.add_argument("--service-rate", type=float, default=None,
+                        help="Queueing mode: single FIFO worker, exponential service at this rate (req/s)")
     args = parser.parse_args()
 
     node_idx = args.node_idx
+    service_rate = args.service_rate
     
     # Handle dynamic spec generation for autoscaled nodes (node-idx >= 5)
     if node_idx < len(BACKEND_SPECS):
