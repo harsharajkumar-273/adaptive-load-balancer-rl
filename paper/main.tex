@@ -366,9 +366,38 @@ $\rho=0.9$ (3.9\,s at 0.95).
 
 \subsection{Real-system validation}
 \label{sec:eval-real}
-\TODO{Fill from research/results/realsys.csv: K gateway processes (src/gateway.py)
-sharing one Redis, 8 FIFO backend processes, open-loop Poisson load; 10$\times$
-slower time scale than the simulator; nominal $\rho=0.8$.}
+\paragraph{Prototype.} We repeat the simulator's grid on a real deployment.
+\begin{itemize}
+\item \textbf{Backends:} 8 backend processes, each serving one request at a
+  time in FIFO order with exponential service times.
+\item \textbf{Gateways:} $K\in\{1,4,16,64\}$ gateways (FastAPI;
+  up to 8 independent gateways per process), sharing one Redis instance
+  that backends heartbeat into.
+\item \textbf{Load:} an open-loop Poisson load generator.
+\item \textbf{Strategies:} every gateway strategy is implemented in the
+  gateway itself: snapshot, learned, local correction, and probing,
+  including a Prequal-style asynchronous probe pool. LinTS-epoch is the
+  production control-plane agent running as a separate process.
+\item \textbf{Time scale:} everything runs 10$\times$ slower than the
+  simulator (backend rates 20..5\,req/s), so single-threaded Python processes
+  have headroom. Refresh periods map from 10/50/200\,ms to 0.1/0.5/2\,s.
+  Synchronised refresh aligns gateway polling to wall-clock boundaries.
+\item \textbf{Runs:} each run measures 90\,s after a 15\,s warm-up, with 3
+  seeds per configuration, at $\rho=0.9$ (steady) and $\rho=0.75$ (gray
+  failure).
+\item \textbf{Isolation:} two runs execute in parallel, each pinned to its
+  own CPU cores, Redis database and ports.
+\item \textbf{Censoring:} requests still waiting 120\,s after the load stops
+  are recorded as censored at their waiting time, so tails of collapsed
+  runs are lower bounds.
+\end{itemize}
+One implementation detail mattered. With a widely used Python HTTP client
+whose connection pool scans every open connection per request, stale-state
+bursts made the gateway CPU-bound and inflated latencies about 100$\times$.
+We therefore use a client with a constant-time connection pool.
+\TODO{Results: rank agreement with the simulator (Spearman per matched cell,
+research/results/summary.md), fig10\_real\_vs\_sim.png, and whether every
+collapse and every robust policy in the simulator reproduces.}
 
 % ---------------------------------------------------------------------------
 \section{Related Work}
@@ -438,9 +467,9 @@ from the paper's description and is tuned in its favour, but it is not the
 production system. Our probing variants probe synchronously; with sub-millisecond
 service times the probe round-trip, which Prequal avoids, would matter more
 than in our setting. The prototype runs on a 10$\times$ slower time scale than
-the simulator, at a nominal $\rho=0.8$, so that single-threaded Python gateways
-keep ample headroom. At higher load, per-request overheads measurably raise
-the effective utilisation.
+the simulator, so that single-threaded Python gateways keep headroom. Each
+prototype run covers about a third of a simulator run in scaled time, which
+emphasises transients such as learning after a gray failure.
 
 \section{Conclusion}
 Horizontally scaled learned routers are exposed to herding in two ways.

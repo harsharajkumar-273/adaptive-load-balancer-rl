@@ -111,8 +111,9 @@ python src/benchmark.py --seeds 5
 
 # Research experiments (multi-gateway herding)
 pip install -r research/requirements.txt
-python -m research.run all          # ~10 min on 4 cores; --quick for a smoke test
+python -m research.run all          # simulator grid, ~35 min on 4 cores; --quick for a smoke test
 python -m research.analyze          # figures + research/results/summary.md
+python -m research.realsys          # real-system grid (needs Redis), ~40-45 h, resumable
 ```
 
 Useful endpoints on `:8000`: `/play-video`, `/auth`, `/analytics`,

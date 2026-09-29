@@ -11,7 +11,12 @@ The paper draft is in [`../paper/main.tex`](../paper/main.tex). All numbers
 below come from [`results/summary.md`](results/summary.md), which reports the
 median over 10 seeds with the interquartile range, across 12,630 simulated runs.
 These are simulation results under the stated assumptions. The real-system
-validation is in progress (`realsys.py`).
+validation (`realsys.py`) repeats the same grid on real processes: gateways,
+backends, Redis and the production LinTS agent. It covers every policy family,
+1–64 gateways, synchronised and unsynchronised refresh, and steady and gray
+scenarios, at a 10× slower time scale. That run is in progress; its results
+will appear in `results/realsys.csv` and in the summary's rank-agreement
+section.
 
 ## Findings
 
@@ -93,6 +98,6 @@ pip install -r requirements.txt -r research/requirements.txt
 python -m research.run all        # ~35 min on 4 cores
 python -m research.analyze        # figures/ + results/summary.md
 redis-server --daemonize yes
-python -m research.realsys        # real-system validation, ~50 min
+python -m research.realsys        # real-system grid: 2,160 runs, ~40-45 h on 4 cores, resumable
 PYTHONPATH=. pytest -q
 ```
