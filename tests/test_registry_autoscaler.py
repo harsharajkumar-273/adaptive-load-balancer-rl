@@ -1,6 +1,6 @@
-# tests/test_phase3.py
+# tests/test_registry_autoscaler.py
 """
-Unit and integration tests for Phase 3 enhancements:
+Tests for:
 - Dynamic Service Discovery & Registration Engine
 - Multi-Region Geo-Routing Latency Calculations
 - Kubernetes HPA Cluster Auto-Scaler Engine logic

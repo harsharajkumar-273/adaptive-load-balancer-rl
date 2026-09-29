@@ -1,6 +1,6 @@
-# tests/test_phase1.py
+# tests/test_config_routing_chaos.py
 """
-Unit and integration tests for Phase 1 enhancements:
+Tests for:
 - Dynamic YAML Config loading
 - Multi-strategy routing engine (P2C, Round Robin, Weighted Round Robin, Least Conn, LinTS)
 - Chaos Engineering fault injections

@@ -1,8 +1,8 @@
-# tests/test_phase4.py
+# tests/test_agent_and_urls.py
 """
-Unit and integration tests for Phase 4 completions:
+Tests for:
 - Dynamic fleet sizing in ContextualBanditAgent (scaling 5 to 10 nodes)
-- Real-time reactive stream updates on Redis Pub/Sub outcome events
+- Single feedback path: each outcome updates the model once
 - Prometheus QoS load shedding counters and latency histograms
 - Dynamic backend URL resolution and failover retry handling
 """

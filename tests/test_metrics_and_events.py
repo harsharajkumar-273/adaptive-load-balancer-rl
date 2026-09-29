@@ -1,8 +1,8 @@
-# tests/test_phase2.py
+# tests/test_metrics_and_events.py
 """
-Unit and integration tests for Phase 2 enhancements:
+Tests for:
 - Prometheus Metrics Exposition exporter
-- QoS Priority Traffic Shaping & Load Shedding
+- QoS load shedding through the gateway
 - Redis Pub/Sub Event-Driven Streaming
 """
 import pytest
@@ -48,16 +48,17 @@ def test_redis_pubsub_event_streaming(mock_cache):
     assert data["latency_ms"] == 25.4
     assert data["success"] is True
 
-def test_qos_load_shedding_threshold():
-    """Verifies QoS traffic shedding boundaries logic."""
-    cpu_list_stressed = [85.0, 82.0, 90.0, 78.0, 88.0]
-    avg_cpu = sum(cpu_list_stressed) / len(cpu_list_stressed)
-    
-    assert avg_cpu > 80.0  # Cluster stressed!
-    
-    # Priority classification checks
-    high_priority_endpoints = ["/auth", "/checkout"]
-    low_priority_endpoints = ["/analytics", "/logs"]
-    
-    assert "auth" in high_priority_endpoints[0]
-    assert "analytics" in low_priority_endpoints[0]
+def test_gateway_sheds_low_priority_under_load(mock_cache):
+    """With average CPU > 80%, /analytics is shed with 429 before any proxying happens."""
+    from fastapi.testclient import TestClient
+    from src.gateway import app, qos_shed_counts
+
+    for i in range(5):
+        mock_cache.record_node_heartbeat(i, 90.0, 10)
+    app.state.shared_cache = mock_cache
+    before = qos_shed_counts["low"]
+    with TestClient(app) as client:
+        resp = client.get("/analytics")
+    assert resp.status_code == 429
+    assert resp.json()["status"] == "shedded"
+    assert qos_shed_counts["low"] == before + 1
