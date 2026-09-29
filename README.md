@@ -1,297 +1,146 @@
-# ⚡ Autonomous AI-Driven Load Balancer
-### Contextual Bandit Traffic Optimization for Distributed Microservices
+# Adaptive Load Balancer: Learned Routing and Multi-Gateway Herding
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Redis-7.0+-red.svg)](https://redis.io/)
-[![Prometheus](https://img.shields.io/badge/Prometheus-Exporter-orange.svg)](https://prometheus.io/)
-[![Grafana](https://img.shields.io/badge/Grafana-Dashboard-orange.svg)](https://grafana.com/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://www.docker.com/)
+This repository has two parts:
 
-An enterprise-grade, portfolio-defining prototype of an **Autonomous Microservice Load Balancer**. It replaces static heuristics with **Online Reinforcement Learning (Linear Thompson Sampling)** to dynamically route traffic away from degrading backends *before* they crash—maintaining SLA compliance under thundering-herd traffic surges.
-
----
-
-## 🎯 WHY THIS PROJECT EXISTS
-
-### The Problem: Traditional Load Balancers Fail Under Dynamic Stress
-
-Traditional load balancing algorithms (Round Robin, Least Connections, Static Weighted) were designed for predictable infrastructure. In modern cloud-native microservices, they fail during extreme traffic spikes (e.g., Netflix release events, concert ticket drops, flash sales):
-
-| Traditional Algorithm | Failure Mode | Why It Breaks at Scale |
-|:---|:---|:---|
-| **Round-Robin** | Blind Traffic Distribution | Distributes requests equally regardless of backend capacity, hardware heterogeneity, or CPU saturation, crushing weaker nodes. |
-| **Weighted Round-Robin** | Static Assumptions | Static capacity weights cannot adapt when a pod suffers from noisy neighbors, JVM garbage collection pauses, or database lock contention. |
-| **Least Connections** | Lagging Telemetry | Active TCP connection count does *not* reflect CPU contention. A node processing 5 heavy requests can be 100% CPU-bound while a node with 20 light requests sits idle. |
-
-### The Impact
-Under sudden load spikes, traditional algorithms route traffic into saturated nodes, causing cascading failure storms, exponential latency degradation, high HTTP 5xx error rates, and **SLA breaches ($> 200\text{ms}$)**.
+1. **`src/` — a working load-balancer prototype.** A FastAPI gateway routes to
+   backend services using one of five strategies, including a Linear Thompson
+   Sampling (LinTS) contextual bandit that runs as a separate control-plane
+   process and publishes routing weights through Redis.
+2. **`research/` — a study of what happens when many gateways learn at once.**
+   Production routing tiers run many gateway replicas that decide independently
+   from the same slightly stale shared state. `research/` is a discrete-event
+   simulator and experiment suite that measures when that makes learned routers
+   *herd* (stampede onto the same backend), and which cheap changes prevent it.
+   Results and write-up: **[research/README.md](research/README.md)**.
 
 ---
 
-## 🚀 THE SOLUTION: CONTEXTUAL BANDIT ADAPTIVE ROUTING
+## Honest summary of results
 
-Rather than relying on static rules, this load balancer treats routing as a **Contextual Multi-Armed Bandit Problem**. 
+- **Single gateway (`python src/benchmark.py`, [benchmark_results.md](benchmark_results.md)).**
+  With the CPU guardrail on, all strategies look similar because the guardrail
+  (not the learning) removes overloaded nodes. With the guardrail **off**, the
+  LinTS agent is clearly *worse* than Least Connections at higher load and
+  under a degraded node. The adaptive agent is not a free win.
+- **Single gateway, in numbers.** At 500 RPS with the guardrail off, LinTS has
+  a P99 of 786 ms against 99 ms for Least Connections. With a degraded node it is
+  817 ms against 699 ms, with 5.7% errors against 1.6%.
+- **Many gateways (`research/`).** Stale shared state makes learned routers herd,
+  worse than classic Join-Shortest-Queue. With 16 gateways and 50 ms stale state,
+  learned greedy routing has a P99 of 2.9 s against 0.8 s for JSQ. Two cheap changes
+  fix most of it:
+  - **P2C over learned scores:** pick two random backends, then choose the one with the
+    lower predicted latency. P99 is 152 ms, and it stays flat from 1 to 64 gateways.
+  - **Local correction:** each gateway counts the requests it has sent itself since
+    the last state update.
 
-Before forwarding a request, the AI evaluates the **real-time system context** (CPU load, queue depth, historical P99 latency, global request rate, and traffic acceleration). It predicts which node will process the request fastest while satisfying safety guardrails.
-
-```
-       TRADITIONAL LOAD BALANCING                        THIS AUTONOMOUS LOAD BALANCER
-  ┌─────────────────────────────────┐               ┌─────────────────────────────────┐
-  │ Round Robin / Least Connections │               │ Linear Thompson Sampling (LinTS)│
-  │   - Static / Lagging Rules      │               │   - Multi-dimensional Context   │
-  │   - Crushes Degrading Nodes     │               │   - Predictive & Self-Healing   │
-  └────────────────┬────────────────┘               └────────────────┬────────────────┘
-                   │                                                 │
-                   ▼                                                 ▼
-     ❌ Cascading Pod Crashes                          ✅ 0 SLA Breaches & Fast Recovery
-```
+  See [research/README.md](research/README.md).
 
 ---
 
-## 🏗️ HOW IT WORKS: SYSTEM ARCHITECTURE
-
-To achieve **sub-millisecond routing speeds**, AI inference and training are decoupled from the live request path into a **Two-Tier Data & Control Plane**:
+## Architecture of the prototype
 
 ```mermaid
 graph TD
-    Client[Traffic Generator / Load Tester] -->|HTTP:8000/auth, /play-video, /analytics| Gateway[API Gateway Proxy - Data Plane]
-    Gateway -->|1. Read Weights & Service Discovery| Registry[Service Registry / Redis]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node1[Backend Node 1 - Port 8001]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| Node2[Backend Node 2 - Port 8002]
-    Gateway -->|2. Route via lin_ts / least_conn / p2c / rr| NodeN[Autoscaled Node N - Port 8006+]
-    
-    HPA[HPA Cluster AutoScaler Engine] -->|Monitors CPU > 75% -> Spawns Nodes| NodeN
-    
-    Node1 -->|Heartbeat & CPU Metrics| Redis[(Redis State Store)]
-    Node2 -->|Heartbeat & CPU Metrics| Redis
-    NodeN -->|Heartbeat & CPU Metrics| Redis
-    
-    Gateway -->|3. Publish Outcome Stream| PubSub[Redis Pub/Sub Channel]
-    PubSub -->|4. Reactive Event Listener| Agent[RL Control Agent Process - Control Plane]
-    Agent -->|5. Push new weights| Redis
-    
-    Gateway -->|GET /metrics| Prom[Prometheus / Grafana]
+    Client[Traffic generator] -->|/auth, /play-video, /analytics| Gateway[Gateway - data plane]
+    Gateway -->|read weights + node metrics| Redis[(Redis)]
+    Gateway -->|route| Nodes[Backend nodes 1..N]
+    Nodes -->|heartbeat: CPU, queue| Redis
+    Gateway -->|per-request outcomes| Redis
+    Agent[LinTS agent - control plane] -->|every 150 ms: read window, write weights| Redis
+    Autoscaler[Autoscaler] -->|spawn / stop nodes| Nodes
+    Gateway -->|/metrics| Prom[Prometheus / Grafana]
 ```
 
-### 1. The Data Plane (API Gateway — Synchronous, <0.1ms overhead)
-*   **FastAPI Reverse Proxy** running on **Port 8000**.
-*   Fetches pre-computed probability weights from **Redis** in **$< 0.1\text{ms}$**.
-*   Enforces **Action Masking** (overrides weight to 0% if CPU $> 85\%$) and **Staleness Circuit Breakers**.
-*   Proxies calls using connection-pooled `httpx.AsyncClient` HTTP clients.
-*   Enforces **Adaptive QoS Traffic Shaping** (`/auth` = High Priority, `/analytics` = Low Priority, shed under load).
+- **Gateway (`src/gateway.py`).** Reads routing weights and node metrics (one
+  batched `MGET`), applies the CPU mask, picks a backend with the active
+  strategy, proxies the request, and records the outcome (one pipelined write).
+  Strategies: `lin_ts`, `least_conn`, `p2c`, `round_robin`, `weighted_round_robin`,
+  switchable at runtime via `POST /strategy`.
+- **Agent (`src/agent.py`).** Every control interval it reads the per-node
+  window of completed requests, updates one Bayesian linear model per node, samples
+  scores, and publishes softmax weights. It learns from windowed feedback only, so
+  each request outcome is counted once.
+- **Fleet discovery (`src/shared_state.py`).** The live fleet size is derived from
+  node heartbeats (between `num_instances` and `max_instances` in `config.yaml`), so
+  nodes started by the autoscaler receive traffic and stopped nodes are dropped.
+- **Guardrails.** CPU mask (weight 0 above 85% CPU, applied equally to every
+  strategy; `RoutingEngine(apply_cpu_mask=False)` disables it for experiments),
+  a staleness circuit breaker (falls back to least connections if the agent stops
+  publishing for > 1 s), retry on another node when a request fails, and shedding
+  of low-priority endpoints when average CPU > 80%.
+- **Explainability.** `GET /explain-routing` shows each node's weight, CPU,
+  queue and recent P99, and whether it is masked.
 
-### 2. The Control Plane (RL Agent — Asynchronous, 150ms loop + Event Stream)
-*   Independent background worker process.
-*   Listens to real-time outcome events via **Redis Pub/Sub** (`events:request_outcomes`).
-*   Runs **Linear Thompson Sampling (LinTS)** Bayesian regression updates.
-*   Calculates new Softmax probability distribution weights and writes them back to Redis.
+### LinTS model
 
-### 3. Independent Backend Microservices (Ports 8001–8010)
-*   FastAPI backend containers tracking actual hardware CPU usage via `psutil`.
-*   Auto-register on boot with the **Service Registry** (`src/registry.py`) and send periodic health heartbeats.
+Context per node: $\mathbf{x}_i = [1, \text{CPU}_i/100, \text{Queue}_i/20, \text{P99}_i/200, \text{Rate}/150, \Delta\text{Rate}/50]$.
+Reward per window: $r_i = -(\text{P99}_i/200 + 5\,\text{Err}_i + 10\,\text{SLA}_i)$.
+Update: $\mathbf{B}_i \mathrel{+}= \mathbf{x}\mathbf{x}^\top$, $\mathbf{f}_i \mathrel{+}= r\mathbf{x}$, $\hat\theta_i = \mathbf{B}_i^{-1}\mathbf{f}_i$;
+sample $\tilde\theta_i \sim \mathcal{N}(\hat\theta_i, v^2\mathbf{B}_i^{-1})$; weights $w = \mathrm{softmax}(\mathbf{x}_i^\top\tilde\theta_i/\tau)$.
 
----
+### Known limitations
 
-## 🧮 THE REINFORCEMENT LEARNING MATHEMATICS
-
-The system models load balancing using **Linear Thompson Sampling (LinTS)**:
-
-### 1. State / Context Vector ($\mathbf{x}_{t,i}$)
-$$\mathbf{x}_{t,i} = \left[1.0,\; \frac{\text{CPU}_i}{100},\; \frac{\text{Queue}_i}{20},\; \frac{\text{P99}_i}{200},\; \frac{\text{GlobalRate}}{150},\; \frac{d/dt \text{ Rate}}{50}\right]^T$$
-
-### 2. Reward Function ($r_{t,i}$)
-The reward evaluates backend performance after each evaluation window:
-$$r_{t,i} = - \left( 1.0 \cdot \frac{\text{P99}_i}{200} + 5.0 \cdot \text{Error\_Rate}_i + 10.0 \cdot \text{SLA\_Breach\_Rate}_i \right)$$
-
-### 3. Bayesian Model Update & Softmax Decision
-For each backend instance $i$:
-$$\mathbf{B}_i \leftarrow \mathbf{B}_i + \mathbf{x}_{t,i} \mathbf{x}_{t,i}^T, \quad \mathbf{f}_i \leftarrow \mathbf{f}_i + r_{t,i} \mathbf{x}_{t,i}$$
-$$\hat{\boldsymbol{\theta}}_i = \mathbf{B}_i^{-1} \mathbf{f}_i, \quad \tilde{\boldsymbol{\theta}}_i \sim \mathcal{N}\left(\hat{\boldsymbol{\theta}}_i, v^2 \mathbf{B}_i^{-1}\right)$$
-$$\text{Score}_i = \mathbf{x}_{t,i}^T \tilde{\boldsymbol{\theta}}_i, \quad w_i = \frac{e^{\text{Score}_i / \tau}}{\sum_j e^{\text{Score}_j / \tau}}$$
-
----
-
-## 🛡️ PRODUCTION SAFETY GUARDRAILS
-
-1.  **Action Masking**: If a node's CPU exceeds **85.0%**, its weight is immediately forced to **0.0%**, preventing it from taking further load until it cools down.
-2.  **Staleness Circuit Breaker**: If the RL Control Plane halts or Redis updates lag $> 1.0\text{s}$, the Gateway trips a circuit breaker and automatically falls back to **Least Connections routing**.
-3.  **Heartbeat Node Detection**: If a backend container crashes, its Redis heartbeat key expires within 2.0s. The Gateway marks the node as offline and routes traffic around it.
-4.  **Adaptive QoS Load Shedding**: Under cluster stress (avg CPU $> 80\%$), the Gateway sheds low-priority endpoints (`/analytics`) with `HTTP 429 Too Many Requests` to guarantee high-priority SLA survival (`/auth`).
+- The Redis client is synchronous. The gateway does about three Redis round trips
+  per request on the event loop; per-request overhead has not been measured.
+- Geo-routing is informational only: the estimated cross-region penalty is
+  reported in `X-Decision-Reason` but is never added to measured latency.
+- Without a reachable Redis, each process falls back to its own in-memory store
+  and **no state is shared** between gateway, agent and backends (a warning is
+  logged). Use Docker Compose or a local `redis-server` for the full system.
+- Backend "CPU" is simulated from queue depth, not measured.
 
 ---
 
-## 📊 REPRODUCIBLE PERFORMANCE BENCHMARKS
+## Quick start
 
-Run the automated performance test suite via `python src/benchmark.py` to compare all 5 algorithms:
-
-### 1. Steady-State Heterogeneous Fleet (100, 500, 1000 RPS)
-
-| Target Load | Strategy | Simulated Throughput | P50 (ms) | P95 (ms) | P99 (ms) | SLA Breaches (>200ms) | Error % |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| 100 RPS | Round Robin | 100.0 req/s | 34.6 ms | 96.0 ms | 97.7 ms | 0.0% | 0.0% |
-| 100 RPS | Weighted Round Robin | 100.0 req/s | 26.1 ms | 46.6 ms | 93.2 ms | 0.0% | 0.0% |
-| 100 RPS | Least Connections | 100.0 req/s | 27.5 ms | 90.0 ms | 95.0 ms | 0.0% | 0.0% |
-| 100 RPS | Power of Two Choices (P2C) | 100.0 req/s | 28.0 ms | 91.5 ms | 95.5 ms | 0.0% | 0.0% |
-| 100 RPS | **RL Adaptive (LinTS)** | 100.0 req/s | 27.9 ms | 90.2 ms | 95.0 ms | 0.0% | 0.0% |
-| 500 RPS | Round Robin | 500.0 req/s | 30.2 ms | 120.5 ms | 164.4 ms | 0.0% | 0.0% |
-| 500 RPS | Weighted Round Robin | 500.0 req/s | 27.6 ms | 92.8 ms | 101.3 ms | 0.0% | 0.0% |
-| 500 RPS | Least Connections | 500.0 req/s | 26.6 ms | 92.9 ms | 99.1 ms | 0.0% | 0.0% |
-| 500 RPS | Power of Two Choices (P2C) | 500.0 req/s | 28.3 ms | 97.2 ms | 102.2 ms | 0.0% | 0.0% |
-| 500 RPS | **RL Adaptive (LinTS)** | 500.0 req/s | 28.9 ms | 96.2 ms | 124.7 ms | 0.0% | 0.0% |
-| 1000 RPS | Round Robin | 1000.0 req/s | 31.8 ms | 53.6 ms | 160.9 ms | 0.0% | 0.0% |
-| 1000 RPS | Weighted Round Robin | 1000.0 req/s | 28.4 ms | 52.2 ms | 119.0 ms | 0.0% | 0.0% |
-| 1000 RPS | Least Connections | 1000.0 req/s | 27.6 ms | 95.9 ms | 139.5 ms | 0.0% | 0.0% |
-| 1000 RPS | Power of Two Choices (P2C) | 1000.0 req/s | 28.9 ms | 50.5 ms | 162.0 ms | 0.0% | 0.0% |
-| 1000 RPS | **RL Adaptive (LinTS)** | 1000.0 req/s | 30.3 ms | 55.6 ms | 133.1 ms | 0.0% | 0.0% |
-
-### 2. Chaos / Fault Injection Stress Benchmark (95% CPU Spike on Node 1 at 500 RPS)
-
-| Strategy | P50 (ms) | P95 (ms) | P99 (ms) | SLA Breaches (>200ms) | Error % | Resilience Behavior |
-|:---|:---:|:---:|:---:|:---:|:---:|:---|
-| Round Robin | 40.4 ms | 132.7 ms | 164.5 ms | 0.1% | 0.1% | ❌ Blind routing routes 20% traffic into saturated node |
-| Least Connections | 35.4 ms | 111.8 ms | 131.4 ms | 0.1% | 0.1% | ⚠️ Lagging TCP queue feedback delays steering |
-| **RL Adaptive (LinTS)** | 38.1 ms | 101.2 ms | 134.5 ms | 0.2% | 0.1% | ✅ Immediate action masking & Bayesian update shift traffic |
-
----
-
-### 💡 Interview Defense: Cold-Start Exploration vs. Steady-State Exploitation
-
-When discussing this benchmark in systems and MLSys engineering interviews:
-
-*   **Why did LinTS explore early?**: In Linear Thompson Sampling, parameter uncertainty $\mathbf{B}_i^{-1}$ is high during cold-start. The agent intentionally injects exploratory variance ($v^2 \mathbf{B}_i^{-1}$) across arms to build its Bayesian model of node latency curves.
-*   **How steady-state convergence is achieved**: As request outcomes accumulate ($\mathbf{B}_i \leftarrow \mathbf{B}_i + \mathbf{x}_{t,i} \mathbf{x}_{t,i}^T$), covariance shrinks. An exploration annealing factor ($\max(0.03, v^2 \cdot 0.9995^t)$) transitions the agent from exploration to strict exploitation, beating naive heuristics on P99 latency.
-*   **Why Round-Robin fails under degradation**: Round-Robin routes blind traffic (20% share) regardless of node health. When a node experiences CPU saturation or noisy neighbors, Round-Robin triggers cascading pod failures. LinTS detects the degradation via multi-dimensional context vectors and reactive Pub/Sub streaming, instantaneously reducing the node's weight to 0%.
-
----
-
-## 🔍 OBSERVABILITY & EXPLAINABILITY
-
-### 1. AI Decision Audit API (`curl http://127.0.0.1:8000/explain-routing`)
-When asked *"Why was Node 3 chosen over Node 1?"*, query the audit endpoint:
-```json
-{
-  "active_strategy": "lin_ts",
-  "circuit_breaker_tripped": false,
-  "registered_instances_count": 5,
-  "candidate_evaluations": [
-    {
-      "node": "Node-1",
-      "name": "Instance-1 (High-Compute)",
-      "rl_weight": 0.4215,
-      "rl_weight_percentage": "42.1%",
-      "cpu_load": "20.0%",
-      "queue_depth": 0,
-      "recent_p99_ms": 12.4,
-      "status": "TOP_CHOICE"
-    },
-    {
-      "node": "Node-5",
-      "name": "Instance-5 (Slow-Legacy)",
-      "rl_weight": 0.0000,
-      "rl_weight_percentage": "0.0%",
-      "cpu_load": "92.0%",
-      "queue_depth": 18,
-      "recent_p99_ms": 185.0,
-      "status": "MASKED_HIGH_CPU"
-    }
-  ]
-}
-```
-
-### 2. Prometheus & Grafana Integration
-*   Exposes standard Prometheus metrics on `http://127.0.0.1:8000/metrics`.
-*   Includes a ready-to-import `grafana_dashboard.json` visualizing live latency histograms (P50/P95/P99), node CPU/queue metrics, active routing weights, and QoS shedding counters.
-
----
-
-## ⚙️ CONFIGURATION ARCHITECTURE (`config.yaml`)
-
-```yaml
-cluster:
-  num_instances: 5
-  port: 8000
-  routing_strategy: "lin_ts"  # Options: lin_ts, least_conn, p2c, round_robin, weighted_round_robin
-
-redis:
-  host: "127.0.0.1"
-  port: 6379
-
-sla:
-  latency_ms: 200.0
-  staleness_threshold_sec: 1.0
-
-agent:
-  control_plane_interval_sec: 0.15
-  exploration_param: 0.3
-  temperature: 0.2
-```
-
----
-
-## 🚀 QUICK START GUIDE
-
-### 1. Local Run (Zero External Dependencies)
 ```bash
-chmod +x run.sh
-./run.sh
-```
+pip install -r requirements.txt
 
-### 2. Docker Compose Multi-Container Network
-```bash
+# Full system (needs Redis on localhost:6379, e.g. `redis-server --daemonize yes`)
+python src/main.py
+
+# Or with containers
 docker compose up --build
+
+# Tests
+PYTHONPATH=. pytest -q
+
+# Single-gateway benchmark (mean ± 95% CI over seeds, CPU mask on and off)
+python src/benchmark.py --seeds 5
+
+# Research experiments (multi-gateway herding)
+pip install -r research/requirements.txt
+python -m research.run all          # ~10 min on 4 cores; --quick for a smoke test
+python -m research.analyze          # figures + research/results/summary.md
 ```
 
-### 3. Run Automated Unit & Integration Tests
-```bash
-source venv/bin/activate
-PYTHONPATH=. pytest -v
-```
-
-### 4. Inject Chaos Fault
-```bash
-# Force 99% CPU spike on Node 1 (idx 0)
-curl -X POST "http://127.0.0.1:8000/chaos/inject?node_idx=0" -H "Content-Type: application/json" -d '{"fault_type": "cpu_spike"}'
-
-# Clear all chaos faults
-curl -X POST "http://127.0.0.1:8000/chaos/clear"
-```
+Useful endpoints on `:8000`: `/play-video`, `/auth`, `/analytics`,
+`/explain-routing`, `/metrics`, `POST /strategy`, `POST /chaos/inject?node_idx=0`
+(body `{"fault_type": "cpu_spike"}`), `POST /chaos/clear`.
 
 ---
 
-## 📁 REPOSITORY STRUCTURE
+## Repository layout
 
 ```
-.
-├── config.yaml                # Dynamic system & hyperparameter settings
-├── Dockerfile                 # Multi-stage container build
-├── docker-compose.yml         # Container network orchestration
-├── grafana_dashboard.json     # Pre-configured Grafana dashboard JSON
-├── benchmark_results.md       # Comparative benchmark report
-├── requirements.txt           # Python dependencies
-├── run.sh                     # Launch & setup script
-├── tests/                     # Test suite
-│   ├── test_load_balancer.py  # Core state & math tests
-│   ├── test_phase1.py         # Multi-strategy & YAML tests
-│   ├── test_phase2.py         # Prometheus & Pub/Sub tests
-│   └── test_phase3.py         # Service Discovery, HPA & Geo-Routing tests
-└── src/
-    ├── config.py              # Configuration loader
-    ├── shared_state.py        # Redis state & Pub/Sub driver
-    ├── routing_strategies.py  # 5 baseline & adaptive algorithms
-    ├── registry.py            # Dynamic Service Discovery engine
-    ├── autoscaler.py          # Kubernetes HPA simulation worker
-    ├── chaos.py               # Chaos Engineering fault injector
-    ├── metrics.py             # Prometheus exposition exporter
-    ├── backend_node.py        # Microservice backend server
-    ├── gateway.py             # Reverse HTTP Proxy & QoS router
-    ├── agent.py               # Thompson Sampling RL Control plane
-    ├── dashboard.py           # ANSI terminal telemetry console
-    ├── benchmark.py           # Performance benchmarking engine
-    └── main.py                # System orchestrator
+src/                     prototype load balancer
+  gateway.py             reverse proxy, routing, QoS, explainability
+  agent.py               LinTS control plane
+  routing_strategies.py  the five strategies + CPU mask
+  shared_state.py        Redis state, fleet discovery, feedback windows
+  backend_node.py        simulated backend service
+  autoscaler.py          scales backend processes on CPU
+  benchmark.py           single-gateway simulation benchmark
+research/                multi-gateway herding study
+  sim.py                 discrete-event simulator (K gateways, N servers, stale state)
+  policies.py            heuristic and learned dispatch policies
+  run.py                 experiment grids -> results/*.csv
+  analyze.py             figures/ and results/summary.md
+  README.md              research question, method, findings
+tests/                   unit tests for both parts
 ```
 
----
+## License
 
-## 📜 LICENSE
-Distributed under the [MIT License](LICENSE).
+MIT — see [LICENSE](LICENSE).
