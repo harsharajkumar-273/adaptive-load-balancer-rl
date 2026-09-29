@@ -44,6 +44,7 @@ import threading
 import time
 from typing import Dict, List, Tuple
 
+import aiohttp
 import httpx
 import numpy as np
 
@@ -130,7 +131,13 @@ def _spawn(cmd: List[str], env: Dict[str, str]) -> subprocess.Popen:
 
 def _stop(procs) -> None:
     for p in procs:
-        p.terminate()
+        if getattr(p, "own_group", False):
+            try:  # a whole run: its process group holds every child it started
+                os.killpg(p.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        else:
+            p.terminate()
     for p in procs:
         try:
             p.wait(timeout=10)
@@ -157,17 +164,21 @@ async def _wait_ready(urls: List[str], timeout: float = 60.0) -> None:
 async def _load(gateways: List[str], rate: float, duration: float, warmup: float, seed: int):
     rng = random.Random(seed)
     results = []
-    limits = httpx.Limits(max_connections=4000, max_keepalive_connections=1000, keepalive_expiry=240)
-    async with httpx.AsyncClient(timeout=600.0, limits=limits) as client:
+    # aiohttp: finding a free connection is O(1) even with thousands open
+    # (httpx's pool scans every connection per request, which would inflate
+    # client-side latency exactly when many requests are outstanding).
+    connector = aiohttp.TCPConnector(limit=0, keepalive_timeout=240)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=None)) as client:
 
         async def one(url: str, t_send: float):
             node = mode = None
             try:
-                resp = await client.get(url)
-                ok = resp.status_code == 200
-                node = resp.headers.get("x-routed-to")
-                mode = resp.headers.get("x-routing-mode")
-            except httpx.HTTPError as e:
+                async with client.get(url) as resp:
+                    await resp.read()
+                    ok = resp.status == 200
+                    node = resp.headers.get("x-routed-to")
+                    mode = resp.headers.get("x-routing-mode")
+            except aiohttp.ClientError as e:
                 ok = False
                 mode = f"client_error:{type(e).__name__}"
             except asyncio.CancelledError:
@@ -302,8 +313,8 @@ def main():
     parser.add_argument("--quick", action="store_true", help="a few short runs to check the setup")
     parser.add_argument("--seeds", type=int, default=3)
     parser.add_argument("--lanes", type=int, default=2, help="isolated experiments run in parallel")
-    parser.add_argument("--duration", type=float, default=45.0, help="measured seconds per run")
-    parser.add_argument("--warmup", type=float, default=10.0)
+    parser.add_argument("--duration", type=float, default=90.0, help="measured seconds per run")
+    parser.add_argument("--warmup", type=float, default=15.0)
     parser.add_argument("--run-one", help=argparse.SUPPRESS)  # internal: one run, JSON in/out
     args = parser.parse_args()
 
@@ -347,7 +358,9 @@ def main():
             cmd = [sys.executable, "-m", "research.realsys", "--run-one", job]
             if lane.cores:
                 cmd = ["taskset", "-c", lane.cores] + cmd
-            proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    start_new_session=True)
+            proc.own_group = True
             with _LIVE_LOCK:
                 _LIVE.add(proc)
             out_text, err_text = proc.communicate()

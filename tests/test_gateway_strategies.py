@@ -22,7 +22,7 @@ def _state(nominal=(4.0, 1.0), **extra):
     st = SimpleNamespace(
         routing_engine=RoutingEngine(apply_cpu_mask=False, learned=LearnedRouter(rng=rng),
                                      nominal_rates=list(nominal), rng=rng),
-        rng=rng, sent_since_refresh=[0] * len(nominal), registry=None, client=None,
+        rng=rng, sent_since_refresh=[0] * len(nominal), registry=None, client=None, upstream=None,
         prequal=PrequalPool(len(nominal), rng),
     )
     for k, v in extra.items():

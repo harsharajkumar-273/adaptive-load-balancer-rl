@@ -19,6 +19,7 @@ seconds; a "+lc" suffix adds local correction (count this gateway's own sends
 since the last refresh). Probing ones (src/probing.py) query backends directly.
 """
 import asyncio
+import aiohttp
 import math
 import random
 import time
@@ -126,9 +127,17 @@ def create_app(port_hint: int = 0) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Initializes connection-pooled async HTTP client, routing engine & service registry."""
-        # Persistent upstream connections: expire before the backends' 300 s keep-alive.
-        limits = httpx.Limits(max_keepalive_connections=500, max_connections=1000, keepalive_expiry=240)
-        app.state.client = httpx.AsyncClient(timeout=GATEWAY_TIMEOUT_SEC, limits=limits)
+        # Admin calls (chaos injection) use httpx.
+        app.state.client = httpx.AsyncClient(timeout=GATEWAY_TIMEOUT_SEC)
+        # Data path (proxied requests and probes) uses aiohttp: its connector finds a
+        # free connection in O(1), whereas httpcore's pool scans every open
+        # connection per request, which makes the gateway CPU-bound when many
+        # requests are waiting at backends. Persistent connections expire before
+        # the backends' 300 s keep-alive.
+        app.state.upstream = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=0, keepalive_timeout=240),
+            timeout=aiohttp.ClientTimeout(total=GATEWAY_TIMEOUT_SEC),
+        )
         app.state.shared_cache = getattr(app.state, "shared_cache", None) or DistributedStateCache(num_instances=NUM_INSTANCES)
         rng, np_rng = _gateway_rng(port_hint)
         app.state.rng = rng
@@ -149,6 +158,7 @@ def create_app(port_hint: int = 0) -> FastAPI:
         app.state.circuit_breaker_tripped = None
         yield
         await app.state.client.aclose()
+        await app.state.upstream.close()
 
     new_app = FastAPI(title="Distributed AI-Driven Load Balancer Gateway", lifespan=lifespan)
     new_app.include_router(router)
@@ -169,7 +179,7 @@ async def choose_backend(request: Request, strategy: str, weights, cpu_list, que
 
     if strategy == "prequal":
         now = time.time
-        st.prequal.spawn_probes(st.client, urls, PROBE_TIMEOUT_SEC, now, n)
+        st.prequal.spawn_probes(st.upstream, urls, PROBE_TIMEOUT_SEC, now, n)
         picked = st.prequal.select(now())
         if picked is None:
             return st.rng.randrange(n), "prequal_empty_pool_random", 0.0
@@ -178,7 +188,7 @@ async def choose_backend(request: Request, strategy: str, weights, cpu_list, que
     if strategy in POWER_OF_D_PROBING:
         d, scorer = POWER_OF_D_PROBING[strategy]
         cands = st.rng.sample(range(n), min(d, n))
-        results = await asyncio.gather(*(probe(st.client, urls[c], PROBE_TIMEOUT_SEC) for c in cands))
+        results = await asyncio.gather(*(probe(st.upstream, urls[c], PROBE_TIMEOUT_SEC) for c in cands))
         live = {c: r[0] for c, r in zip(cands, results) if r is not None}
         if not live:
             return st.rng.choice(cands), f"{strategy}_probe_failed", 0.0
@@ -201,6 +211,11 @@ async def choose_backend(request: Request, strategy: str, weights, cpu_list, que
         st.sent_since_refresh[chosen] += 1
     return chosen, mode, float(queue_list[chosen])
 
+async def _get_json(session: aiohttp.ClientSession, url: str):
+    """GET url on the data-path session; returns (status, JSON body)."""
+    async with session.get(url) as resp:
+        return resp.status, await resp.json()
+
 def _is_valid_strategy(strategy: str) -> bool:
     base = strategy[:-3] if strategy.endswith("+lc") else strategy
     return base in VALID_STRATEGIES and not (strategy.endswith("+lc") and base in PROBING_STRATEGIES)
@@ -218,7 +233,7 @@ async def forward_proxy_request(
 ):
     """Core HTTP reverse proxy logic with Geo-Routing & QoS Traffic Shaping."""
     shared_cache = request.app.state.shared_cache
-    http_client = request.app.state.client
+    upstream = request.app.state.upstream
     routing_engine = request.app.state.routing_engine
     
     active_strategy = strategy.lower() if strategy else request.app.state.current_strategy
@@ -263,9 +278,9 @@ async def forward_proxy_request(
     start_time = time.time()
     
     try:
-        proxy_resp = await http_client.get(target_url)
+        resp_status, res_data = await _get_json(upstream, target_url)
         latency_ms = (time.time() - start_time) * 1000.0
-        success = (proxy_resp.status_code == status.HTTP_200_OK)
+        success = (resp_status == status.HTTP_200_OK)
 
         geo_str = f"{geo_penalty:.0f}ms" if geo_penalty is not None else "unknown"
         reason = f"Strategy={routing_mode}; Target=Node-{chosen_idx + 1}; ClientRegion={client_region.upper()}; NodeRegion={node_region.upper()}; EstGeoPenalty={geo_str}; CPU={cpu_list[chosen_idx]:.1f}%"
@@ -275,8 +290,8 @@ async def forward_proxy_request(
         response.headers["X-Decision-Reason"] = reason
         response.headers["X-Proxy-Latency"] = f"{latency_ms:.2f} ms"
         
-        response.status_code = proxy_resp.status_code
-        
+        response.status_code = resp_status
+
         breached_sla = latency_ms > SLA_LATENCY_MS
         shared_cache.record_request_outcome(chosen_idx, latency_ms, success, breached_sla)
         if _learns(active_strategy):
@@ -292,27 +307,25 @@ async def forward_proxy_request(
             except Exception:
                 logger.debug("Failed to observe Prometheus latency", exc_info=True)
 
-        res_data = proxy_resp.json()
         res_data["est_geo_penalty_ms"] = geo_penalty
         return res_data
-        
-    except httpx.RequestError:
+
+    except (aiohttp.ClientError, asyncio.TimeoutError):
         # High Availability: failover retry to another healthy node
         fallback_candidates = [i for i in range(len(cpu_list)) if i != chosen_idx and cpu_list[i] <= CPU_MASK_THRESHOLD]
         if fallback_candidates:
             alt_idx = min(fallback_candidates, key=lambda i: queue_list[i] if i < len(queue_list) else 0)
             alt_url = f"{get_node_url(request.app.state.registry, alt_idx)}/work"
             try:
-                proxy_resp = await http_client.get(alt_url)
+                resp_status, res_data = await _get_json(upstream, alt_url)
                 latency_ms = (time.time() - start_time) * 1000.0
-                success = (proxy_resp.status_code == status.HTTP_200_OK)
+                success = (resp_status == status.HTTP_200_OK)
                 breached_sla = latency_ms > SLA_LATENCY_MS
                 shared_cache.record_request_outcome(alt_idx, latency_ms, success, breached_sla)
                 response.headers["X-Routed-To"] = f"Node-{alt_idx + 1}"
                 response.headers["X-Routing-Mode"] = f"{routing_mode}_failover"
                 response.headers["X-Proxy-Latency"] = f"{latency_ms:.2f} ms"
-                response.status_code = proxy_resp.status_code
-                res_data = proxy_resp.json()
+                response.status_code = resp_status
                 res_data["est_geo_penalty_ms"] = geo_penalty
                 return res_data
             except Exception:

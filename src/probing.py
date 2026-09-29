@@ -24,7 +24,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional, Tuple
 
-import httpx
+import aiohttp
 
 PROBING_STRATEGIES = ["prequal", "p2c_probe", "p3c_probe", "sed3_probe",
                       "p2c_learned_probe", "p3c_learned_probe"]
@@ -39,12 +39,12 @@ POWER_OF_D_PROBING = {
 }
 
 
-async def probe(client: httpx.AsyncClient, url: str, timeout: float) -> Optional[Tuple[int, float]]:
+async def probe(session: aiohttp.ClientSession, url: str, timeout: float) -> Optional[Tuple[int, float]]:
     try:
-        resp = await client.get(f"{url}/probe", timeout=timeout)
-        data = resp.json()
+        async with session.get(f"{url}/probe", timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            data = await resp.json()
         return int(data["rif"]), float(data["latency_est"])
-    except (httpx.HTTPError, KeyError, ValueError):
+    except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError):
         return None
 
 
@@ -90,7 +90,7 @@ class PrequalPool:
         entry[4] += 1
         return entry[1], entry[2]
 
-    def spawn_probes(self, client: httpx.AsyncClient, urls: Dict[int, str], timeout: float,
+    def spawn_probes(self, client: aiohttp.ClientSession, urls: Dict[int, str], timeout: float,
                      now_fn, n_backends: int) -> None:
         """Fire-and-forget probes; responses land in the pool when they arrive."""
         for s in self.probe_targets(n_backends):

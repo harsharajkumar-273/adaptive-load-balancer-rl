@@ -209,6 +209,103 @@ def frontier_figure(df: pd.DataFrame) -> str:
     return path
 
 
+# Real-system strategy name -> simulator policy name.
+REAL_TO_SIM = {
+    "least_conn": "jsq", "sed": "sed", "p2c": "p2c",
+    "greedy_learned": "greedy", "ts_learned": "ts", "lin_ts": "ts_epoch",
+    "p2c_learned": "p2c_learned", "p3c_learned": "p3c_learned",
+    "least_conn+lc": "jsq+lc", "greedy_learned+lc": "greedy+lc", "ts_learned+lc": "ts+lc",
+    "p2c_learned+lc": "p2c_learned+lc",
+    "prequal": "prequal", "p2c_probe": "p2c_probe", "p3c_probe": "p3c_probe", "sed3_probe": "sed3_probe",
+    "p2c_learned_probe": "p2c_learned_probe", "p3c_learned_probe": "p3c_learned_probe",
+}
+REAL_TIME_SCALE = 10
+
+
+def _spearman(a, b) -> float:
+    ra = pd.Series(a).rank().to_numpy()
+    rb = pd.Series(b).rank().to_numpy()
+    if ra.std() == 0 or rb.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(ra, rb)[0, 1])
+
+
+def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_probing) -> None:
+    """Real-system tables, sim-vs-real scatter, and per-cell rank agreement."""
+    real = real.copy()
+    real["policy"] = real.strategy.map(REAL_TO_SIM)
+    real["staleness"] = (real.state_refresh_sec / REAL_TIME_SCALE).round(4)
+    real["desync"] = ~real.aligned.astype(bool)
+    real.loc[real.staleness == 0, "desync"] = False
+    real["num_dispatchers"] = real.num_gateways
+    real["p99_sim_units"] = real.p99_ms / REAL_TIME_SCALE
+
+    sim = sim_main.copy()
+    if sim_probing is not None:
+        probe = sim_probing.copy()
+        # Probing policies ignore staleness/refresh: replicate them into every cell.
+        cells = sim[["scenario", "staleness", "desync", "num_dispatchers"]].drop_duplicates()
+        probe = probe.drop(columns=["staleness", "desync"]).merge(cells, on=["scenario", "num_dispatchers"])
+        sim = pd.concat([sim, probe], ignore_index=True)
+    keys = ["scenario", "staleness", "desync", "num_dispatchers", "policy"]
+    real_med = real.groupby(keys).p99_sim_units.median().rename("real")
+    sim_med = sim.groupby(keys).p99_ms.median().rename("sim")
+    both = pd.concat([real_med, sim_med], axis=1, join="inner").reset_index()
+    if both.empty:
+        return
+
+    # Rank agreement within each cell (same scenario, staleness, refresh mode, gateways).
+    rows = []
+    for cell, g in both.groupby(["scenario", "staleness", "desync", "num_dispatchers"]):
+        if len(g) >= 4:
+            rows.append((*cell, len(g), _spearman(g.real, g.sim)))
+    cells = pd.DataFrame(rows, columns=["scenario", "staleness", "desync", "gateways", "policies", "spearman"])
+    lines = ["| scenario | staleness (sim s) | unsync refresh | gateways | policies | Spearman ρ |",
+             "|:---|:---:|:---:|:---:|:---:|:---:|"]
+    lines += [f"| {r.scenario} | {r.staleness:g} | {r.desync} | {r.gateways} | {r.policies} | {r.spearman:.2f} |"
+              for r in cells.itertuples()]
+    summary = (f"Median per-cell Spearman ρ = {cells.spearman.median():.2f} over {len(cells)} cells; "
+               f"{(cells.spearman >= 0.7).mean() * 100:.0f}% of cells have ρ ≥ 0.7. "
+               f"Pooled over all {len(both)} matched configurations: ρ = {_spearman(both.real, both.sim):.2f}.")
+    _section(out, "Real system vs. simulator: rank agreement of policies by P99", summary + "\n\n" + "\n".join(lines))
+
+    # Scatter: real (in simulator time units) vs. simulator, per matched configuration.
+    fig, ax = plt.subplots(figsize=(6.2, 5.2))
+    families = {"heuristic": (HEURISTICS + ["jsq+lc"], "#2a78d6", "o"),
+                "learned": (["greedy", "ts", "ts_epoch", "greedy+lc", "ts+lc"], "#eb6834", "^"),
+                "learned power-of-d": (["p2c_learned", "p3c_learned", "p2c_learned+lc"], "#008300", "s"),
+                "probing": (PROBING, "#e34948", "D")}
+    for label, (pols, color, marker) in families.items():
+        sub = both[both.policy.isin(pols)]
+        ax.scatter(sub.sim, sub.real, s=18, color=color, marker=marker, alpha=0.7, label=label, linewidths=0)
+    lo = max(1.0, min(both.sim.min(), both.real.min()) * 0.8)
+    hi = max(both.sim.max(), both.real.max()) * 1.2
+    ax.plot([lo, hi], [lo, hi], color=MUTED, linewidth=1, linestyle="--", label="real = simulator")
+    _axes_style(ax, "simulator P99 (ms)", "real system P99 ÷ 10 (ms)")
+    ax.set_xscale("log")
+    ax.legend(frameon=False, fontsize=8, labelcolor=TEXT)
+    ax.set_title("Real system vs. simulator, per matched configuration", color=TEXT, fontsize=11, loc="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig10_real_vs_sim.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+    # Real-system P99 tables at 16 gateways.
+    order = [p for p in REAL_TO_SIM if p in set(real.strategy)]
+    for scen in sorted(real.scenario.unique()):
+        for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
+            sub = real[(real.scenario == scen) & (real.num_gateways == 16)
+                       & ((real.desync == phase) | (real.state_refresh_sec == 0))]
+            if sub.empty:
+                continue
+            _section(out, f"Real system, {scen}, {name} refresh, 16 gateways: P99 (ms) vs. refresh period (s)",
+                     table(sub, "strategy", "state_refresh_sec", "p99_ms", order, sorted(sub.state_refresh_sec.unique())))
+    cens = real.groupby("strategy").censored.sum()
+    cens = cens[cens > 0]
+    if len(cens):
+        _section(out, "Real system: censored requests (still waiting after the 120 s drain; tails are lower bounds)",
+                 "\n".join(f"- {k}: {int(v)}" for k, v in cens.items()))
+
+
 def fmt(med, lo, hi):
     return f"{med:,.0f} [{lo:,.0f}–{hi:,.0f}]"
 
@@ -370,15 +467,9 @@ def main():
                  table(df, "setting", "staleness", "p99_ms", sorted(df.setting.unique()), sorted(df.staleness.unique())))
 
     real_csv = os.path.join(RESULTS, "realsys.csv")
-    if os.path.exists(real_csv):
-        df = pd.read_csv(real_csv)
-        df["policy"] = df.strategy
-        df["setting"] = "K=" + df.num_gateways.astype(str)
-        for k in sorted(df.num_gateways.unique()):
-            sub = df[df.num_gateways == k]
-            _section(out, f"Real system, {k} gateway(s): P99 (ms) vs. Redis refresh period (s)",
-                     table(sub, "strategy", "state_refresh_sec", "p99_ms", list(dict.fromkeys(sub.strategy)),
-                           sorted(sub.state_refresh_sec.unique())))
+    if os.path.exists(real_csv) and os.path.exists(main_csv):
+        real_system_section(out, pd.read_csv(real_csv), pd.read_csv(main_csv), pd.read_csv(probing_csv)
+                            if os.path.exists(probing_csv) else None)
 
     with open(os.path.join(RESULTS, "summary.md"), "w") as f:
         f.write("# Results summary (generated by `python -m research.analyze`)\n\n" + "\n".join(out) + "\n")
