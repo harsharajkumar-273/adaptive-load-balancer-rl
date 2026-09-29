@@ -94,25 +94,42 @@ def get_node_url(registry: ServiceRegistry, chosen_idx: int) -> str:
         return BACKEND_URLS[chosen_idx]
     return f"http://127.0.0.1:{BACKEND_PORT_BASE + chosen_idx}"
 
-def _refresh_due(last_read: float, now: float) -> bool:
-    if STATE_REFRESH_ALIGNED and STATE_REFRESH_SEC > 0:
-        # Every gateway refreshes at the same wall-clock boundaries.
-        return math.floor(now / STATE_REFRESH_SEC) > math.floor(last_read / STATE_REFRESH_SEC)
-    return now - last_read >= STATE_REFRESH_SEC
+def next_refresh_time(now: float, period: float, phase: float) -> float:
+    """Next instant strictly after `now` of the form phase + k * period."""
+    return math.floor((now - phase) / period) * period + phase + period
+
+def _read_snapshot(app: FastAPI, now: float):
+    """Reads shared state from Redis into the gateway's snapshot; resets local-correction counters."""
+    weights, last_update = app.state.shared_cache.get_routing_weights()
+    metrics = app.state.shared_cache.get_instance_metrics()
+    app.state.state_snapshot = (now, weights, last_update, metrics)
+    app.state.sent_since_refresh = [0] * len(metrics["queue"])
+    return app.state.state_snapshot
+
+async def _refresh_loop(app: FastAPI, phase: float):
+    """
+    Proactive refresh: re-read shared state exactly at phase + k * STATE_REFRESH_SEC.
+    Synchronised gateways share phase 0 (wall-clock boundaries), so they all
+    read the same state at the same instant; otherwise each gateway has its
+    own random phase.
+    """
+    while True:
+        now = time.time()
+        await asyncio.sleep(next_refresh_time(now, STATE_REFRESH_SEC, phase) - now)
+        try:
+            _read_snapshot(app, time.time())
+        except Exception:
+            logger.warning("State refresh failed", exc_info=True)
 
 def read_cluster_state(app: FastAPI, now: float):
     """
-    Returns (weights, weights_last_update, node_metrics), re-reading Redis only
-    every STATE_REFRESH_SEC seconds (every request when it is 0). A refresh
-    also resets the local-correction counters.
+    Returns (weights, weights_last_update, node_metrics). With
+    STATE_REFRESH_SEC == 0 Redis is read on every request (live state);
+    otherwise the snapshot maintained by _refresh_loop is returned.
     """
     snap = app.state.state_snapshot
-    if snap is None or _refresh_due(snap[0], now):
-        weights, last_update = app.state.shared_cache.get_routing_weights()
-        metrics = app.state.shared_cache.get_instance_metrics()
-        snap = (now, weights, last_update, metrics)
-        app.state.state_snapshot = snap
-        app.state.sent_since_refresh = [0] * len(metrics["queue"])
+    if snap is None or STATE_REFRESH_SEC <= 0:
+        snap = _read_snapshot(app, now)
     return snap[1], snap[2], snap[3]
 
 def _gateway_rng(port_hint: int):
@@ -156,7 +173,13 @@ def create_app(port_hint: int = 0) -> FastAPI:
         app.state.registry = ServiceRegistry(app.state.shared_cache)
         app.state.current_strategy = ROUTING_STRATEGY
         app.state.circuit_breaker_tripped = None
+        refresher = None
+        if STATE_REFRESH_SEC > 0:
+            phase = 0.0 if STATE_REFRESH_ALIGNED else rng.uniform(0.0, STATE_REFRESH_SEC)
+            refresher = asyncio.create_task(_refresh_loop(app, phase))
         yield
+        if refresher:
+            refresher.cancel()
         await app.state.client.aclose()
         await app.state.upstream.close()
 

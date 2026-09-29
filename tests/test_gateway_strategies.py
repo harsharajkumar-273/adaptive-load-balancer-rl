@@ -96,14 +96,29 @@ def test_prequal_pool_expires_old_probes():
     assert pool.select(5.0) is None
 
 
-def test_aligned_refresh_boundaries(monkeypatch):
-    monkeypatch.setattr(gw, "STATE_REFRESH_ALIGNED", True)
-    monkeypatch.setattr(gw, "STATE_REFRESH_SEC", 1.0)
-    assert not gw._refresh_due(10.2, 10.9)
-    assert gw._refresh_due(10.9, 11.0)
-    monkeypatch.setattr(gw, "STATE_REFRESH_ALIGNED", False)
-    assert not gw._refresh_due(10.9, 11.0)
-    assert gw._refresh_due(10.2, 11.2)
+def test_next_refresh_time():
+    # Synchronised: phase 0 -> wall-clock boundaries shared by every gateway.
+    assert gw.next_refresh_time(10.2, 1.0, 0.0) == pytest.approx(11.0)
+    assert gw.next_refresh_time(11.0, 1.0, 0.0) == pytest.approx(12.0)
+    # Own phase.
+    assert gw.next_refresh_time(10.2, 1.0, 0.3) == pytest.approx(10.3)
+    assert gw.next_refresh_time(10.35, 1.0, 0.3) == pytest.approx(11.3)
+
+
+def test_refresh_loop_reads_on_schedule(monkeypatch):
+    reads = []
+    monkeypatch.setattr(gw, "STATE_REFRESH_SEC", 0.05)
+    monkeypatch.setattr(gw, "_read_snapshot", lambda app, now: reads.append(now))
+
+    async def run():
+        task = asyncio.create_task(gw._refresh_loop(None, 0.0))
+        await asyncio.sleep(0.23)
+        task.cancel()
+
+    asyncio.run(run())
+    assert 3 <= len(reads) <= 5
+    # every read lands on a 50 ms boundary (within scheduling jitter)
+    assert all(abs(t / 0.05 - round(t / 0.05)) < 0.2 for t in reads)
 
 
 def test_create_app_gives_independent_gateways():

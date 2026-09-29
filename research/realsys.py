@@ -346,11 +346,12 @@ def main():
     queue_lock = threading.Lock()
     pending = list(todo)
     counter = {"n": 0}
+    stopping = threading.Event()
 
     def worker(lane: Lane):
         while True:
             with queue_lock:
-                if not pending:
+                if not pending or stopping.is_set():
                     return
                 cfg = pending.pop(0)
             job = json.dumps({"cfg": cfg, "lane": lane.idx, "cores": lane.cores,
@@ -366,6 +367,8 @@ def main():
             out_text, err_text = proc.communicate()
             with _LIVE_LOCK:
                 _LIVE.discard(proc)
+            if stopping.is_set():
+                return
             if proc.returncode != 0:  # keep the grid going; a re-run retries this config
                 print(f"[lane {lane.idx}] FAILED {cfg}: {err_text.strip().splitlines()[-1:]}", flush=True)
                 continue
@@ -392,6 +395,7 @@ def main():
             while t.is_alive():
                 t.join(timeout=1.0)
     except KeyboardInterrupt:
+        stopping.set()
         with _LIVE_LOCK:
             live = list(_LIVE)
         _stop(live)
