@@ -1,10 +1,16 @@
-% MLSys 2027 submission draft.
-% FORMAT: the official template is the MLSys 2025 style (mlsys2025style.zip from
-% mlsys.org). This draft uses a plain two-column article so it compiles anywhere;
-% before submitting, replace the preamble below with the official one
-% (\usepackage{mlsys2025} etc.) and re-check the 10-page limit.
-\documentclass[10pt,twocolumn,letterpaper]{article}
-\usepackage[margin=0.75in,columnsep=0.25in]{geometry}
+% MLSys 2027 submission.
+% FORMAT: MLSys 2027 uses the MLSys 2025 style (mlsys2025style.zip on mlsys.org).
+% Put mlsys2025.sty in this directory and the official layout is used
+% automatically; otherwise a close two-column approximation is used so the
+% draft always compiles. Re-check the 10-page limit with the official style.
+\IfFileExists{mlsys2025.sty}{\def\officialstyle{}}{}
+\ifdefined\officialstyle
+  \documentclass{article}
+  \usepackage{mlsys2025}
+\else
+  \documentclass[10pt,twocolumn,letterpaper]{article}
+  \usepackage[margin=0.75in,columnsep=0.25in]{geometry}
+\fi
 \usepackage{times}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{graphicx}
@@ -18,15 +24,28 @@
 \newcommand{\TODO}[1]{\textcolor{red}{[TODO: #1]}}
 \graphicspath{{../research/figures/}}
 
-\title{Do Learned Load Balancers Herd?\\
-\large Stale Shared State, Many Gateways, and Learned Power-of-$d$ Routing}
+\newcommand{\papertitle}{Do Learned Load Balancers Herd? Stale Shared State, Many Gateways, and Learned Power-of-$d$ Routing}
 % Double-blind: no author names, affiliations, acknowledgements or
 % identifying repository links in the submitted version.
-\author{Anonymous Authors}
-\date{}
 
 \begin{document}
-\maketitle
+\ifdefined\officialstyle
+  % Title block macros of the MLSys (ICML-derived) style; check against the
+  % example paper shipped in mlsys2025style.zip.
+  \twocolumn[
+    \mlsystitle{\papertitle}
+    \begin{mlsysauthorlist}
+      \mlsysauthor{Anonymous Authors}{}
+    \end{mlsysauthorlist}
+    \vskip 0.3in
+  ]
+  \printAffiliationsAndNotice{}
+\else
+  \title{\papertitle}
+  \author{Anonymous Authors}
+  \date{}
+  \maketitle
+\fi
 
 \begin{abstract}
 Request routers in production are horizontally scaled: many gateway replicas
@@ -353,51 +372,63 @@ slower time scale than the simulator; nominal $\rho=0.8$.}
 
 % ---------------------------------------------------------------------------
 \section{Related Work}
-\TODO{DRAFT written without access to the full papers. Verify every claim
-below against the sources, and search for missing work, before submission.}
 
-\paragraph{Load balancing with old information.} Mitzenmacher showed that
-greedy shortest-queue routing on periodically updated information herds, and
-that choosing among a few random candidates is robust to
-staleness~\citep{mitzenmacher2000old}. Dahlin proposed interpreting stale load
-information using its age~\citep{dahlin2000stale}. We show that learned
-routers inherit, and amplify, the greedy failure mode. The power-of-$d$
-remedy still applies, now as a filter in front of a learned score.
+\paragraph{Load balancing with old information.} Mitzenmacher studied
+dispatching on queue lengths that are $T$ seconds old and found that a small
+amount of information goes a long way: sending each task to the less loaded
+of two randomly chosen servers is highly effective across a wide range of
+parameters, while acting on the apparently least-loaded server is
+not~\citep{mitzenmacher2000old}. Dahlin showed that interpreting load
+information according to its age avoids pathological behaviour even when the
+information is very old~\citep{dahlin2000stale}. Power-of-$d$ choices gives
+an exponential improvement over random assignment~\citep{mitzenmacher2001power}.
+We show that learned routers inherit, and amplify, the failure of acting on
+the apparently best server. The power-of-$d$ remedy still applies, now as a
+filter in front of a learned score.
 
-\paragraph{Multiple dispatchers.} Work on heterogeneous systems with many
-dispatchers studies herding when dispatchers act on shared or local
-information, and proposes stochastic coordination among
-dispatchers~\citep{zhou2020multidispatcher,goren2021stochastic}. These works
-analyse queue-length-based policies. We study policies whose inputs include a
-model learned independently by each dispatcher. We identify
-cross-dispatcher agreement of learned models as a herding mechanism, and
-posterior disagreement as a partial remedy. \TODO{check whether these papers
-already cover learned or estimated service rates.}
+\paragraph{Multiple dispatchers.} Zhou et al.\ give asymptotically optimal
+policies for large heterogeneous systems with many
+dispatchers~\citep{zhou2021multidispatcher}. Goren et al.\ observe that
+herding arises because dispatchers ignore that others act concurrently, and
+propose stochastically coordinated dispatching~\citep{goren2021stochastic}.
+Tahir et al.\ model many load balancers acting on delayed information as a
+mean-field control problem and learn a dispatching policy with policy
+gradients~\citep{tahir2022meanfield}. That work designs one policy for all
+dispatchers, trained offline on a model of the system. We instead study the
+policies that deployed learned routers actually run, each gateway fitting its
+own latency model online. We show how independently trained models create a
+second, cross-gateway herding mechanism that coordination-free randomisation
+removes.
 
-\paragraph{Power of $d$ choices.} Sampling $d$ servers and joining the
-shortest queue exponentially improves on random assignment~\citep{mitzenmacher2001power}.
-Our learned variant replaces the queue-length comparison with a learned
-latency prediction. This handles heterogeneous and drifting servers, which
-plain JSQ($d$) ignores (\cref{fig:frontier}).
+\paragraph{Learning service rates.} Van Kempen et al.\ learn the SED policy
+online for two servers with unknown rates and achieve finite regret by
+interleaving forced exploration~\citep{vankempen2026adaptivesed}. Their
+setting has one dispatcher with fresh state. Ours has many dispatchers with
+stale shared state. The learned-versus-oracle comparison in
+\cref{fig:frontier} is the multi-dispatcher counterpart of their question.
 
 \paragraph{Replica selection and probing.} C3 ranks replicas by
-server-reported feedback with rate control~\citep{c3nsdi2015}. Prequal probes
-replicas asynchronously for requests-in-flight and latency, and selects with a
-hot--cold rule~\citep{prequal2024}. We compare against a re-implementation of
-Prequal at equal probe budgets, and we show that without probing,
-learned power-of-$d$ on stale shared state beats Prequal limited to one probe
-per request.
+server-reported feedback combined with rate control~\citep{c3nsdi2015}.
+Prequal probes servers asynchronously for requests-in-flight and estimated
+latency, reuses probes, and selects with a hot--cold lexicographic
+rule~\citep{prequal2024}. Dodoor schedules from cached server load that is
+refreshed in batches, trading freshness for fewer
+messages~\citep{da2025dodoor}. We compare against a Prequal re-implementation
+at equal probe budgets. Learned power-of-$d$ on stale shared state is another
+point on the freshness/message trade-off.
 
-\paragraph{Learned and LLM-serving routers.} Routers for LLM inference score
-replicas by predicted prefix-cache reuse and load, and run as horizontally
-scaled
-services~\citep{llmd,vllmrouter}. Online-learning routers adapt routing from
-observed latency~\citep{lodestar2026}. Multi-player bandit formulations study
-several learners sharing arms~\citep{multiplayerbandit2025}. \TODO{state
-precisely how each differs; in particular whether Lodestar evaluates many
-router replicas.} Our results suggest these routers should combine learned
-scores with random candidate sampling, and should avoid long weight-publication
-intervals.
+\paragraph{Learned and LLM-serving routers.} Learned Load Balancing trains
+models that choose datacenter network paths and adapt to
+failures~\citep{chang2024llb}. QEdgeProxy runs one proxy per node, formulates
+routing as a multi-player bandit, and routes across a \emph{pool} of instances
+likely to meet QoS rather than a single best one~\citep{cilic2025qedgeproxy}.
+Routers for LLM inference score replicas by cache reuse and load and are
+deployed as horizontally scaled services~\citep{llmd,vllmrouter}. Lodestar
+learns LLM request routing online and adapts to workload
+changes~\citep{lodestar2026}. Our results apply to all of these whenever many
+router replicas act on shared, delayed signals. We suggest pairing learned
+scores with random candidate sampling, and publishing weights at short
+intervals or not at all.
 
 \section{Limitations}
 Our backends are single-server FIFO queues and the learned model has two

@@ -1,6 +1,5 @@
-% NOTE: every entry below must be checked against the published version
-% (authors, venue, year, pages) before submission. Entries marked TODO were
-% written from memory or search snippets and have NOT been verified.
+% Metadata verified against publisher / DBLP / arXiv listings via web search
+% (September 2026). Entries for arXiv-only works cite the arXiv version.
 
 @article{mitzenmacher2000old,
   title   = {How Useful Is Old Information?},
@@ -9,8 +8,7 @@
   volume  = {11},
   number  = {1},
   pages   = {6--20},
-  year    = {2000},
-  note    = {TODO verify}
+  year    = {2000}
 }
 
 @article{mitzenmacher2001power,
@@ -20,8 +18,7 @@
   volume  = {12},
   number  = {10},
   pages   = {1094--1104},
-  year    = {2001},
-  note    = {TODO verify}
+  year    = {2001}
 }
 
 @article{dahlin2000stale,
@@ -31,65 +28,92 @@
   volume  = {11},
   number  = {10},
   pages   = {1033--1047},
-  year    = {2000},
-  note    = {TODO verify}
+  year    = {2000}
 }
 
 @inproceedings{prequal2024,
   title     = {Load is not what you should balance: Introducing {Prequal}},
   author    = {Wydrowski, Bartek and Kleinberg, Robert and Rumble, Stephen M. and Archer, Aaron},
-  booktitle = {21st USENIX Symposium on Networked Systems Design and Implementation (NSDI)},
-  year      = {2024},
-  note      = {TODO verify author list}
+  booktitle = {21st USENIX Symposium on Networked Systems Design and Implementation (NSDI 24)},
+  year      = {2024}
 }
 
 @inproceedings{c3nsdi2015,
   title     = {{C3}: Cutting Tail Latency in Cloud Data Stores via Adaptive Replica Selection},
   author    = {Suresh, Lalith and Canini, Marco and Schmid, Stefan and Feldmann, Anja},
-  booktitle = {12th USENIX Symposium on Networked Systems Design and Implementation (NSDI)},
-  year      = {2015},
-  note      = {TODO verify}
+  booktitle = {12th USENIX Symposium on Networked Systems Design and Implementation (NSDI 15)},
+  year      = {2015}
 }
 
-@article{zhou2020multidispatcher,
+@article{zhou2021multidispatcher,
   title   = {Asymptotically Optimal Load Balancing in Large-scale Heterogeneous Systems with Multiple Dispatchers},
   author  = {Zhou, Xingyu and Shroff, Ness and Wierman, Adam},
-  journal = {arXiv preprint arXiv:2002.08908},
-  year    = {2020},
-  note    = {TODO verify authors and published venue}
+  journal = {Performance Evaluation},
+  year    = {2021},
+  note    = {arXiv:2002.08908}
 }
 
-@article{goren2021stochastic,
-  title   = {Stochastic Coordination in Heterogeneous Load Balancing Systems},
-  author  = {Goren, Guy and Vargaftik, Shay and Moses, Yoram},
-  journal = {arXiv preprint arXiv:2105.09389},
-  year    = {2021},
-  note    = {TODO verify authors and published venue}
+@inproceedings{goren2021stochastic,
+  title     = {Stochastic Coordination in Heterogeneous Load Balancing Systems},
+  author    = {Goren, Guy and Vargaftik, Shay and Moses, Yoram},
+  booktitle = {ACM Symposium on Principles of Distributed Computing (PODC)},
+  pages     = {403--414},
+  year      = {2021}
+}
+
+@inproceedings{tahir2022meanfield,
+  title     = {Learning Mean-Field Control for Delayed Information Load Balancing in Large Queuing Systems},
+  author    = {Tahir, Anam and Cui, Kai and Koeppl, Heinz},
+  booktitle = {51st International Conference on Parallel Processing (ICPP)},
+  year      = {2022}
+}
+
+@article{vankempen2026adaptivesed,
+  title   = {Learning Adaptive {SED} for Heterogeneous Load Balancing},
+  author  = {van Kempen, Sanne and Sanders, Jaron and Sloothaak, Fiona and Wolf, Maarten G.},
+  journal = {arXiv preprint arXiv:2609.06881},
+  year    = {2026}
+}
+
+@article{chang2024llb,
+  title   = {Learned Load Balancing},
+  author  = {Chang, Brian and Subramanian, Kausik and D'Antoni, Loris and Akella, Aditya},
+  journal = {Theoretical Computer Science},
+  volume  = {1003},
+  pages   = {114611},
+  year    = {2024}
 }
 
 @article{lodestar2026,
   title   = {Lodestar: An Online-Learning {LLM} Inference Router},
-  author  = {TODO},
+  author  = {Lim, Gangmuk and Zhao, Wanyu and Godfrey, Brighten and Shan, Jiaxin and Xu, Le and Xie, Liguang},
   journal = {arXiv preprint arXiv:2606.00946},
-  year    = {2026},
-  note    = {TODO read and verify; closest learned-router related work}
+  year    = {2026}
 }
 
-@article{multiplayerbandit2025,
+@article{cilic2025qedgeproxy,
   title   = {{QoS}-Aware Load Balancing in the Computing Continuum via Multi-Player Bandits},
-  author  = {TODO},
+  author  = {{\v{C}}ili{\'c}, Ivan and Podnar {\v{Z}}arko, Ivana and Frangoudis, Pantelis A. and Dustdar, Schahram},
   journal = {arXiv preprint arXiv:2512.18915},
-  year    = {2025},
-  note    = {TODO read and verify}
+  year    = {2025}
+}
+
+@article{da2025dodoor,
+  title   = {Dodoor: Efficient Randomized Decentralized Scheduling with Load Caching for Heterogeneous Tasks and Clusters},
+  author  = {Da, Wei and Kalyvianaki, Evangelia},
+  journal = {arXiv preprint arXiv:2510.12889},
+  year    = {2025}
 }
 
 @misc{llmd,
-  title        = {llm-d: Kubernetes-native distributed inference},
+  author       = {{llm-d contributors}},
+  title        = {llm-d: Kubernetes-native distributed inference serving},
   howpublished = {\url{https://llm-d.ai}},
-  note         = {Accessed 2026. TODO cite the specific router/EPP documentation}
+  year         = {2025}
 }
 
 @misc{vllmrouter,
+  author       = {{vLLM team}},
   title        = {{vLLM} Router: A High-Performance and Prefill/Decode Aware Load Balancer},
   howpublished = {\url{https://vllm.ai/blog/2025-12-13-vllm-router-release}},
   year         = {2025}

@@ -68,9 +68,13 @@ GRAY_FACTOR = 0.2
 GRAY_AT_FRACTION = 0.4   # simulator: t=12 s of a 30 s run
 CONTROL_INTERVAL_SEC = 0.15 * TIME_SCALE
 SETUP_SEC = 15.0         # launch-to-load delay (fixed, so the gray failure lands at a known time)
+# After the load stops, wait at most this long for outstanding requests. Any
+# still waiting are recorded as *censored* at the time waited so far, so tail
+# percentiles of collapsed runs are lower bounds (see the "censored" column).
+DRAIN_TIMEOUT_SEC = 120.0
 
 FIELDS = ["scenario", "strategy", "state_refresh_sec", "aligned", "num_gateways", "rho", "seed",
-          "requests", "errors", "p50_ms", "p99_ms", "p999_ms", "mean_ms", "fano", "fallback_frac", "modes",
+          "requests", "censored", "errors", "p50_ms", "p99_ms", "p999_ms", "mean_ms", "fano", "fallback_frac", "modes",
           "duration_sec", "warmup_sec", "lane"]
 
 Config = Tuple[str, str, float, bool, int, int]   # scenario, strategy, refresh, aligned, K, seed
@@ -166,6 +170,9 @@ async def _load(gateways: List[str], rate: float, duration: float, warmup: float
             except httpx.HTTPError as e:
                 ok = False
                 mode = f"client_error:{type(e).__name__}"
+            except asyncio.CancelledError:
+                results.append((t_send, time.perf_counter() - t_send, False, None, "censored"))
+                raise
             results.append((t_send, time.perf_counter() - t_send, ok, node, mode))
 
         tasks = []
@@ -177,7 +184,10 @@ async def _load(gateways: List[str], rate: float, duration: float, warmup: float
             if delay > 0:
                 await asyncio.sleep(delay)
             tasks.append(asyncio.create_task(one(f"{rng.choice(gateways)}/play-video", time.perf_counter())))
-        await asyncio.gather(*tasks)
+        _, still_waiting = await asyncio.wait(tasks, timeout=DRAIN_TIMEOUT_SEC)
+        for task in still_waiting:
+            task.cancel()
+        await asyncio.gather(*still_waiting, return_exceptions=True)
     return [(t - start, lat, ok, node, mode) for t, lat, ok, node, mode in results if t - start >= warmup]
 
 
@@ -261,10 +271,12 @@ def run_one(cfg: Config, lane: Lane, duration: float, warmup: float) -> Dict:
     for m in measured:
         modes[m[4] or "none"] = modes.get(m[4] or "none", 0) + 1
     fallback = sum(c for mode, c in modes.items() if any(w in mode for w in ("failed", "empty", "error", "none")))
+    censored = modes.get("censored", 0)
     return {
         "scenario": scen, "strategy": strategy, "state_refresh_sec": refresh, "aligned": aligned,
         "num_gateways": k, "rho": rho, "seed": seed,
-        "requests": len(measured), "errors": sum(1 for m in measured if not m[2]),
+        "requests": len(measured), "censored": censored,
+        "errors": sum(1 for m in measured if not m[2] and m[4] != "censored"),
         "p50_ms": float(np.percentile(lat_ms, 50)), "p99_ms": float(np.percentile(lat_ms, 99)),
         "p999_ms": float(np.percentile(lat_ms, 99.9)), "mean_ms": float(lat_ms.mean()),
         "fano": _fano(measured, len(MUS)), "fallback_frac": fallback / max(1, len(measured)),
