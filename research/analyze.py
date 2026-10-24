@@ -16,6 +16,7 @@ from typing import Dict, Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams.update({"font.size": 10, "axes.labelsize": 10, "xtick.labelsize": 9, "ytick.labelsize": 9, "legend.fontsize": 9})
 import numpy as np
 import pandas as pd
 
@@ -168,7 +169,7 @@ def multi_panels(panels, x, metric, title, xlabel, ylabel, fname, xticks=None, x
                 handles[l] = h
                 labels.append(l)
     fig.legend([handles[l] for l in labels], labels, frameon=False, fontsize=8, labelcolor=TEXT,
-               loc="center left", bbox_to_anchor=(1.0, 0.5))
+               loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
     fig.suptitle(title, color=TEXT, fontsize=12, x=0.01, ha="left")
     fig.tight_layout()
     os.makedirs(FIGURES, exist_ok=True)
@@ -209,8 +210,8 @@ def frontier_figure(df: pd.DataFrame) -> str:
         ax.set_title(titles[scen], color=TEXT, fontsize=11, loc="left")
         _axes_style(ax, "probes per request", "P99 latency (ms, log)" if scen == "steady" else "")
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
-    fig.suptitle("Probe cost vs. tail latency (16 gateways, 50 ms staleness for snapshot-based policies)",
+    fig.legend(handles, labels, frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
+    fig.suptitle("Probe cost vs. tail latency (16 routers, 50 ms staleness for snapshot-based policies)",
                  color=TEXT, fontsize=12, x=0.01, ha="left")
     fig.tight_layout()
     path = os.path.join(FIGURES, "fig7_probe_frontier.png")
@@ -243,6 +244,7 @@ def _spearman(a, b) -> float:
 def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_probing) -> None:
     """Real-system tables, sim-vs-real scatter, and per-cell rank agreement."""
     real = real.copy()
+    _section(out, "NOTE", f"Real-system data are partial ({len(real)} of 2,160 planned runs); not used in the paper.")
     real["policy"] = real.strategy.map(REAL_TO_SIM)
     real["staleness"] = (real.state_refresh_sec / REAL_TIME_SCALE).round(4)
     real["desync"] = ~real.aligned.astype(bool)
@@ -270,7 +272,7 @@ def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_pro
         if len(g) >= 4:
             rows.append((*cell, len(g), _spearman(g.real, g.sim)))
     cells = pd.DataFrame(rows, columns=["scenario", "staleness", "desync", "gateways", "policies", "spearman"])
-    lines = ["| scenario | staleness (sim s) | unsync refresh | gateways | policies | Spearman ρ |",
+    lines = ["| scenario | staleness (sim s) | unsync refresh | routers | policies | Spearman ρ |",
              "|:---|:---:|:---:|:---:|:---:|:---:|"]
     lines += [f"| {r.scenario} | {r.staleness:g} | {r.desync} | {r.gateways} | {r.policies} | {r.spearman:.2f} |"
               for r in cells.itertuples()]
@@ -294,12 +296,12 @@ def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_pro
     _axes_style(ax, "simulator P99 (ms)", "real system P99 ÷ 10 (ms)")
     ax.set_xscale("log")
     ax.legend(frameon=False, fontsize=8, labelcolor=TEXT)
-    ax.set_title("Real system vs. simulator, per matched configuration", color=TEXT, fontsize=11, loc="left")
+    ax.set_title(f"PARTIAL DATA ({len(real)} of 2,160 runs): real system vs. simulator", color=TEXT, fontsize=11, loc="left")
     fig.tight_layout()
     fig.savefig(os.path.join(FIGURES, "fig10_real_vs_sim.png"), dpi=150, facecolor="white", bbox_inches="tight")
     plt.close(fig)
 
-    # Real-system P99 tables at 16 gateways.
+    # Real-system P99 tables at 16 routers.
     order = [p for p in REAL_TO_SIM if p in set(real.strategy)]
     for scen in sorted(real.scenario.unique()):
         for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
@@ -307,7 +309,7 @@ def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_pro
                        & ((real.desync == phase) | (real.state_refresh_sec == 0))]
             if sub.empty:
                 continue
-            _section(out, f"Real system, {scen}, {name} refresh, 16 gateways: P99 (ms) vs. refresh period (s)",
+            _section(out, f"Real system, {scen}, {name} refresh, 16 routers: P99 (ms) vs. refresh period (s)",
                      table(sub, "strategy", "state_refresh_sec", "p99_ms", order, sorted(sub.state_refresh_sec.unique())))
     cens = real.groupby("strategy").censored.sum()
     cens = cens[cens > 0]
@@ -370,7 +372,7 @@ def llm_staleness_figure(df: pd.DataFrame, k: int = 16) -> None:
             ax.set_xticks(range(len(st)))
             ax.set_xticklabels([staleness_label(v) for v in st])
     h, l = axes[0, 0].get_legend_handles_labels()
-    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
     fig.suptitle(f"LLM serving: prefix-cache routers, {k} routers, 8 prefill replicas", color=TEXT, fontsize=12,
                  x=0.01, ha="left")
     fig.tight_layout()
@@ -410,7 +412,7 @@ def llm_regret_figure(held: pd.DataFrame) -> None:
     ax.axvline(1.0, color=MUTED, linewidth=0.8)
     _axes_style(ax, "P99 relative to the best tuned threshold in that regime (log)", "fraction of regimes ≤ x", logy=False)
     ax.set_xlim(0.6, 200)
-    ax.legend(frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    ax.legend(frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
     ax.set_title(f"Tuning-free robustness across {n} workload regimes (threshold tuned on held-out seeds)",
                  color=TEXT, fontsize=11, loc="left")
     fig.tight_layout()
@@ -492,7 +494,7 @@ def models_section(out, df: pd.DataFrame) -> None:
         ax.set_title(f"{scen}, {staleness_label(st)} staleness", color=TEXT, fontsize=10, loc="left")
         _axes_style(ax, "latency-model features", "P99 latency (ms, log)" if ax is axes[0] else "")
     h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
     fig.suptitle("The conclusions do not depend on the latency model (16 routers, synchronised refresh)",
                  color=TEXT, fontsize=12, x=0.01, ha="left")
     fig.tight_layout()
@@ -583,7 +585,7 @@ def awf_figure(df: pd.DataFrame) -> None:
             panels.append((f"{sname}, {pname} refresh", frame,
                            ["sed", "jsq", "p2c_learned", "p3c_learned", "awf", "awf_learned"]))
     multi_panels(panels, "staleness", "p99_ms",
-                 "Age-aware stochastic split vs. power-of-d over learned scores (16 gateways)",
+                 "Age-aware stochastic split vs. power-of-d over learned scores (16 routers)",
                  "shared-state refresh period", "P99 latency (ms, log)", "fig13_age_aware.png",
                  xticks=sorted(d.staleness.unique()), categorical=True, tick_label=staleness_label, ncols=2)
 
@@ -635,30 +637,30 @@ def main():
                     ("Unsynchronised refresh", frame[frame.desync], policies)]
 
         multi_panels(by_phase(steady[steady.num_dispatchers == k_ref], HEADLINE), "staleness", "p99_ms",
-                     f"P99 latency vs. state staleness ({k_ref} gateways, ρ=0.9)",
+                     f"P99 latency vs. state staleness ({k_ref} routers, ρ=0.9)",
                      "shared-state refresh period", "P99 latency (ms, log)", "fig1_p99_vs_staleness.png", **st_axis)
         multi_panels(by_phase(steady[steady.staleness == st_ref],
                               ["jsq", "p2c", "greedy", "ts", "ts_epoch", "p2c_learned", "prequal"]),
                      "num_dispatchers", "p99_ms",
-                     f"P99 latency vs. number of gateways ({st_ref * 1000:.0f} ms staleness, ρ=0.9)",
-                     "independent gateways K", "P99 latency (ms, log)", "fig2_p99_vs_dispatchers.png",
+                     f"P99 latency vs. number of routers ({st_ref * 1000:.0f} ms staleness, ρ=0.9)",
+                     "independent routers K", "P99 latency (ms, log)", "fig2_p99_vs_dispatchers.png",
                      xticks=sorted(df.num_dispatchers.unique()), xlog=True)
         multi_panels(by_phase(steady[steady.num_dispatchers == k_ref],
                               ["jsq", "sed", "p2c", "greedy", "ts", "p2c_learned", "prequal"]),
                      "staleness", "fano",
-                     f"Herding index vs. staleness ({k_ref} gateways); 1 = independent arrivals",
+                     f"Herding index vs. staleness ({k_ref} routers); 1 = independent arrivals",
                      "shared-state refresh period", "Fano factor of per-server arrivals (log)",
                      "fig3_herding_vs_staleness.png", **st_axis)
         multi_panels([("Synchronised refresh", steady[(steady.num_dispatchers == k_ref) & ~steady.desync],
                        FIXES + ["prequal"])],
                      "staleness", "p99_ms",
-                     f"Mitigations: local correction and power-of-two over learned scores ({k_ref} gateways)",
+                     f"Mitigations: local correction and power-of-two over learned scores ({k_ref} routers)",
                      "shared-state refresh period", "P99 latency (ms, log)", "fig4_mitigations.png", **st_axis)
         multi_panels(by_phase(gray[gray.num_dispatchers == k_ref],
                               ["jsq", "sed", "p2c", "greedy", "ts", "p2c_learned", "p2c_learned+lc",
                                "prequal", "p3c_learned_probe"]),
                      "staleness", "p99_ms",
-                     f"Gray failure: fastest server drops to 20% speed at t=12 s ({k_ref} gateways, ρ=0.75)",
+                     f"Gray failure: fastest server drops to 20% speed at t=12 s ({k_ref} routers, ρ=0.75)",
                      "shared-state refresh period", "P99 latency (ms, log)", "fig5_gray_failure.png", **st_axis)
 
         for scen, sub in (("Steady state", steady), ("Gray failure", gray)):
@@ -666,7 +668,7 @@ def main():
                 ph = sub[sub.desync == phase]
                 _section(out, f"{scen}, {name} refresh: P99 (ms), K={k_ref}, median [IQR] over seeds",
                          table(ph[ph.num_dispatchers == k_ref], "policy", "staleness", "p99_ms", TABLE_ORDER, st_ticks))
-                _section(out, f"{scen}, {name} refresh: P99 (ms) vs. gateways, staleness={st_ref}s",
+                _section(out, f"{scen}, {name} refresh: P99 (ms) vs. routers, staleness={st_ref}s",
                          table(ph[ph.staleness == st_ref], "policy", "num_dispatchers", "p99_ms", TABLE_ORDER,
                                sorted(ph.num_dispatchers.unique())))
         for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
@@ -682,7 +684,7 @@ def main():
             for scen in ("steady", "gray"):
                 for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
                     sub = mdf[(mdf.scenario == scen) & (mdf.desync == phase) & (mdf.num_dispatchers == 16)]
-                    _section(out, f"Age-aware split, {scen}, {name} refresh, 16 gateways: P99 (ms)",
+                    _section(out, f"Age-aware split, {scen}, {name} refresh, 16 routers: P99 (ms)",
                              table(sub, "policy", "staleness", "p99_ms",
                                    ["sed", "jsq", "p2c_learned", "p3c_learned", "awf", "awf_learned"],
                                    sorted(sub.staleness.unique())))
@@ -717,12 +719,12 @@ def main():
         pols = [p for p in TABLE_ORDER if p in set(df.policy)]
         multi_panels([("Steady state (ρ=0.9)", df[df.scenario == "steady"], pols),
                       ("Gray failure (ρ=0.75)", df[df.scenario == "gray"], pols)],
-                     "num_dispatchers", "p99_ms", "Probing policies vs. number of gateways",
-                     "independent gateways K", "P99 latency (ms, log)", "fig9_probing_vs_gateways.png",
+                     "num_dispatchers", "p99_ms", "Probing policies vs. number of routers",
+                     "independent routers K", "P99 latency (ms, log)", "fig9_probing_vs_gateways.png",
                      xticks=sorted(df.num_dispatchers.unique()), xlog=True)
         for scen in ("steady", "gray"):
             sub = df[df.scenario == scen]
-            _section(out, f"Probing policies ({scen}): P99 (ms) vs. gateways",
+            _section(out, f"Probing policies ({scen}): P99 (ms) vs. routers",
                      table(sub, "policy", "num_dispatchers", "p99_ms", pols, sorted(sub.num_dispatchers.unique())))
 
     robust_csv = os.path.join(RESULTS, "robust.csv")
@@ -736,7 +738,7 @@ def main():
                                df[(df.burstiness == burst) & (df.desync == phase)],
                                ["jsq", "p2c", "ts+lc", "p2c_learned", "prequal", "sed3_probe", "p3c_learned_probe"]))
         multi_panels(panels, "service_cv", "p99_ms",
-                     f"Robustness: service-time variability and bursty arrivals ({k_ref} gateways, 50 ms staleness)",
+                     f"Robustness: service-time variability and bursty arrivals ({k_ref} routers, 50 ms staleness)",
                      "service-time coefficient of variation", "P99 latency (ms, log)", "fig8_robustness.png",
                      xticks=sorted(df.service_cv.unique()), ncols=2)
         for burst in sorted(df.burstiness.unique()):

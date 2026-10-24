@@ -24,7 +24,7 @@
 | ts+lc | 72 [69–75] | 103 [100–110] | 168 [159–174] | 472 [403–500] |
 | p2c_learned+lc | 112 [108–116] | 117 [113–124] | 150 [145–152] | 223 [210–237] |
 
-## Steady state, synchronised refresh: P99 (ms) vs. gateways, staleness=0.05s
+## Steady state, synchronised refresh: P99 (ms) vs. routers, staleness=0.05s
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -72,7 +72,7 @@
 | ts+lc | 72 [69–75] | 93 [89–97] | 129 [125–132] | 192 [187–203] |
 | p2c_learned+lc | 112 [108–116] | 117 [114–122] | 138 [134–142] | 183 [172–190] |
 
-## Steady state, unsynchronised refresh: P99 (ms) vs. gateways, staleness=0.05s
+## Steady state, unsynchronised refresh: P99 (ms) vs. routers, staleness=0.05s
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -120,7 +120,7 @@
 | ts+lc | 91 [86–94] | 133 [128–138] | 225 [208–259] | 667 [470–3,742] |
 | p2c_learned+lc | 167 [158–172] | 175 [167–186] | 217 [211–231] | 428 [363–457] |
 
-## Gray failure, synchronised refresh: P99 (ms) vs. gateways, staleness=0.05s
+## Gray failure, synchronised refresh: P99 (ms) vs. routers, staleness=0.05s
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -168,7 +168,7 @@
 | ts+lc | 91 [86–94] | 120 [114–124] | 165 [160–169] | 267 [258–282] |
 | p2c_learned+lc | 167 [158–172] | 176 [169–186] | 205 [197–211] | 296 [281–305] |
 
-## Gray failure, unsynchronised refresh: P99 (ms) vs. gateways, staleness=0.05s
+## Gray failure, unsynchronised refresh: P99 (ms) vs. routers, staleness=0.05s
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -240,7 +240,7 @@
 | ts+lc | 0.9 [0.9–0.9] | 1.3 [1.2–1.3] | 2.9 [2.6–3.0] | 2.5 [2.3–2.6] |
 | p2c_learned+lc | 0.8 [0.8–0.9] | 0.9 [0.9–1.0] | 1.3 [1.2–1.3] | 1.3 [1.3–1.3] |
 
-## Age-aware split, steady, synchronised refresh, 16 gateways: P99 (ms)
+## Age-aware split, steady, synchronised refresh, 16 routers: P99 (ms)
 
 | policy | staleness=0 | staleness=0.01 | staleness=0.05 | staleness=0.2 |
 |:---|:---:|:---:|:---:|:---:|
@@ -251,7 +251,7 @@
 | awf | 72 [70–74] | 99 [97–102] | 155 [154–158] | 264 [247–278] |
 | awf_learned | 76 [73–78] | 98 [96–101] | 150 [147–153] | 296 [291–306] |
 
-## Age-aware split, steady, unsynchronised refresh, 16 gateways: P99 (ms)
+## Age-aware split, steady, unsynchronised refresh, 16 routers: P99 (ms)
 
 | policy | staleness=0 | staleness=0.01 | staleness=0.05 | staleness=0.2 |
 |:---|:---:|:---:|:---:|:---:|
@@ -262,7 +262,7 @@
 | awf | 72 [70–74] | 89 [86–92] | 112 [111–114] | 147 [138–150] |
 | awf_learned | 76 [73–78] | 93 [88–95] | 121 [117–126] | 186 [183–187] |
 
-## Age-aware split, gray, synchronised refresh, 16 gateways: P99 (ms)
+## Age-aware split, gray, synchronised refresh, 16 routers: P99 (ms)
 
 | policy | staleness=0 | staleness=0.01 | staleness=0.05 | staleness=0.2 |
 |:---|:---:|:---:|:---:|:---:|
@@ -273,7 +273,7 @@
 | awf | 157 [153–163] | 202 [196–206] | 331 [327–339] | 727 [711–744] |
 | awf_learned | 90 [87–94] | 120 [116–122] | 163 [159–169] | 375 [333–436] |
 
-## Age-aware split, gray, unsynchronised refresh, 16 gateways: P99 (ms)
+## Age-aware split, gray, unsynchronised refresh, 16 routers: P99 (ms)
 
 | policy | staleness=0 | staleness=0.01 | staleness=0.05 | staleness=0.2 |
 |:---|:---:|:---:|:---:|:---:|
@@ -732,7 +732,7 @@
 | probe_d d=4;score=sed | 4.00 | 180 [170–183] |
 | prequal r_probe=5.0;reuse_budget=1 | 5.00 | 145 [140–148] |
 
-## Probing policies (steady): P99 (ms) vs. gateways
+## Probing policies (steady): P99 (ms) vs. routers
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -743,7 +743,7 @@
 | p2c_learned_probe | 111 [106–113] | 111 [108–115] | 112 [108–118] | 140 [125–151] |
 | p3c_learned_probe | 82 [81–87] | 82 [81–85] | 84 [81–87] | 99 [92–109] |
 
-## Probing policies (gray): P99 (ms) vs. gateways
+## Probing policies (gray): P99 (ms) vs. routers
 
 | policy | num_dispatchers=1 | num_dispatchers=4 | num_dispatchers=16 | num_dispatchers=64 |
 |:---|:---:|:---:|:---:|:---:|
@@ -874,11 +874,15 @@
 | ts_epoch temperature=20.0 | 339 [338–339] | 347 [339–356] |
 | ts_epoch temperature=5.0 | 202 [200–206] | 232 [229–237] |
 
+## NOTE
+
+Real-system data are partial (239 of 2,160 planned runs); not used in the paper.
+
 ## Real system vs. simulator: rank agreement of policies by P99
 
 Median per-cell Spearman ρ = 0.85 over 21 cells; 76% of cells have ρ ≥ 0.7. Pooled over all 239 matched configurations: ρ = 0.91.
 
-| scenario | staleness (sim s) | unsync refresh | gateways | policies | Spearman ρ |
+| scenario | staleness (sim s) | unsync refresh | routers | policies | Spearman ρ |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | steady | 0 | False | 1 | 18 | 0.79 |
 | steady | 0 | False | 4 | 18 | 0.85 |
@@ -902,7 +906,7 @@ Median per-cell Spearman ρ = 0.85 over 21 cells; 76% of cells have ρ ≥ 0.7. 
 | steady | 0.2 | True | 4 | 12 | 0.87 |
 | steady | 0.2 | True | 16 | 8 | 0.76 |
 
-## Real system, steady, synchronised refresh, 16 gateways: P99 (ms) vs. refresh period (s)
+## Real system, steady, synchronised refresh, 16 routers: P99 (ms) vs. refresh period (s)
 
 | strategy | state_refresh_sec=0 | state_refresh_sec=0.1 | state_refresh_sec=0.5 | state_refresh_sec=2 |
 |:---|:---:|:---:|:---:|:---:|
@@ -925,7 +929,7 @@ Median per-cell Spearman ρ = 0.85 over 21 cells; 76% of cells have ρ ≥ 0.7. 
 | p2c_learned_probe | – | – | – | – |
 | p3c_learned_probe | – | – | – | – |
 
-## Real system, steady, unsynchronised refresh, 16 gateways: P99 (ms) vs. refresh period (s)
+## Real system, steady, unsynchronised refresh, 16 routers: P99 (ms) vs. refresh period (s)
 
 | strategy | state_refresh_sec=0 | state_refresh_sec=0.1 | state_refresh_sec=0.5 | state_refresh_sec=2 |
 |:---|:---:|:---:|:---:|:---:|
