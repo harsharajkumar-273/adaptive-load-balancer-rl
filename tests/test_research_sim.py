@@ -12,7 +12,8 @@ SHORT = dict(duration=6.0, warmup=1.0)
 
 def test_same_seed_is_deterministic():
     sc = Scenario(staleness=0.05, num_dispatchers=4, **SHORT)
-    assert simulate(sc, "ts", seed=3) == simulate(sc, "ts", seed=3)
+    a, b = simulate(sc, "ts", seed=3), simulate(sc, "ts", seed=3)
+    assert a.keys() == b.keys() and all(a[k] == b[k] for k in a)
 
 
 @pytest.mark.parametrize("policy", ALL_POLICIES)
@@ -110,3 +111,125 @@ def test_synchronous_probing_is_charged_its_round_trip():
     probe = simulate(sc, "p2c_learned_probe", seed=0)
     assert probe["probes_per_request"] == pytest.approx(2.0)
     assert probe["p50_ms"] >= 0.5  # at least one 0.5 ms probe round-trip
+
+
+# --- age-aware water-filling ------------------------------------------------
+
+from research.policies import waterfill  # noqa: E402
+
+
+def test_waterfill_is_a_distribution():
+    p = waterfill([3, 0, 7, 1], [200.0, 100.0, 50.0, 150.0], lam=450.0, age=0.05)
+    assert all(x >= 0 for x in p) and sum(p) == pytest.approx(1.0)
+
+
+def test_waterfill_tends_to_capacity_split_when_state_is_very_old():
+    mu = [200.0, 100.0, 50.0]
+    p = waterfill([40, 0, 5], mu, lam=300.0, age=1e4)
+    assert p == pytest.approx([m / sum(mu) for m in mu], abs=1e-3)
+
+
+def test_waterfill_tends_to_shortest_expected_delay_when_state_is_fresh():
+    mu = [200.0, 100.0, 50.0]
+    q = [30, 4, 2]            # (q+1)/mu: 0.155, 0.05, 0.06 -> server 1 is best
+    p = waterfill(q, mu, lam=300.0, age=1e-6)
+    assert p[1] > 0.99
+
+
+def test_waterfill_shifts_load_away_from_long_queues():
+    mu = [100.0, 100.0]
+    p = waterfill([20, 0], mu, lam=150.0, age=0.05)
+    assert p[1] > p[0]
+
+
+def test_waterfill_equalises_fluid_delay_where_queues_form():
+    # Offered load (400/s) exceeds capacity (350/s) within the window: queues form
+    # at every active server, and the split equalises their expected delay.
+    mu, q, lam, age = [200.0, 100.0, 50.0], [2, 5, 1], 400.0, 0.1
+    p = waterfill(q, mu, lam, age)
+    queues = [q[i] + (lam * p[i] - mu[i]) * age for i in range(3)]
+    assert all(x > 0 for x in queues)
+    delays = [(queues[i] + 1.0) / mu[i] for i in range(3) if p[i] > 1e-9]
+    assert max(delays) - min(delays) < 1e-9
+
+
+@pytest.mark.parametrize("policy", ["awf", "awf_learned"])
+def test_awf_policies_run_and_stay_stable_under_stale_state(policy):
+    r = simulate(Scenario(staleness=0.2, num_dispatchers=16, **SHORT), policy, seed=0)
+    assert r["requests"] > 1000 and r["p99_ms"] < 5000
+
+
+def test_latency_model_higher_dimension_recovers_coefficients():
+    rng = np.random.default_rng(1)
+    m = LatencyModel(n=1, gamma=1.0, lam=1e-3, dim=3)
+    for _ in range(3000):
+        q, hit = rng.integers(0, 15), rng.integers(0, 2)
+        m.update(0, [1.0, q, hit], 0.4 + 1.5 * q - 0.3 * hit + rng.normal(0, 0.1))
+    assert m.theta[0] == pytest.approx([0.4, 1.5, -0.3], abs=0.05)
+    X = np.array([[1.0, 2.0, 1.0]])
+    assert m.predict_mean(X)[0] == pytest.approx(0.4 + 3.0 - 0.3, abs=0.1)
+
+
+def test_latency_model_dim2_matrix_and_list_inputs_agree():
+    m = LatencyModel(n=3)
+    for s in range(3):
+        for q in range(5):
+            m.update(s, q, 0.1 * (s + 1) * (q + 1))
+    q = [1.0, 2.0, 3.0]
+    X = np.stack([np.ones(3), np.array(q)], axis=1)
+    assert m.predict_mean(q) == pytest.approx(m.predict_mean(X))
+
+
+# --- herding as burst concentration --------------------------------------------
+
+from research.sim import window_burst_stats  # noqa: E402
+
+
+def test_window_burst_stats_extremes():
+    n, per_window = 4, 40
+    times = [w + i / per_window for w in range(50) for i in range(per_window)]
+    stampede = window_burst_stats(times, [w % n for w in range(50) for _ in range(per_window)], n, 1.0)
+    spread = window_burst_stats(times, [i % n for i in range(len(times))], n, 1.0)
+    assert stampede[0] == pytest.approx(1.0) and spread[0] == pytest.approx(1.0 / n)
+
+
+def test_deterministic_routing_on_common_state_concentrates_a_window_and_power_of_d_caps_it():
+    # Theory (paper): argmin on a snapshot every gateway shares sends ~all of a window to one server;
+    # sampling d of N candidates caps any server's share near d/N.
+    sc = Scenario(staleness=0.2, num_dispatchers=16, duration=12.0, warmup=2.0)
+    jsq = simulate(sc, "jsq", seed=0)["window_share_mean"]
+    p2c = simulate(sc, "p2c", seed=0)["window_share_mean"]
+    assert jsq > 0.6
+    assert p2c < 2.0 / len(sc.mus) + 0.06
+
+
+# --- model-variant ablation -----------------------------------------------------
+
+from research.policies import ABLATION_POLICIES  # noqa: E402
+
+
+@pytest.mark.parametrize("policy", ABLATION_POLICIES)
+def test_ablation_policies_run(policy):
+    r = simulate(Scenario(staleness=0.05, num_dispatchers=4, rho=0.7, **SHORT), policy, seed=0)
+    assert r["requests"] > 1000 and 0 < r["p50_ms"] <= r["p99_ms"]
+
+
+def test_linucb_is_optimistic_about_unexplored_servers():
+    import random
+    d = make_policy("linucb", n=3, nominal_mus=(1, 1, 1), rng=random.Random(0), latency_scale=0.01,
+                    np_rng=np.random.default_rng(0), explore=3.0)
+    for _ in range(300):                   # servers 0 and 1 are well explored, equally good
+        d.observe(0, 0.01, 1.0, 0.0)
+        d.observe(1, 0.01, 1.0, 0.0)
+    picks = {d.choose(0.0, [1, 1, 1], 1)[0] for _ in range(5)}
+    assert picks == {2}                    # never-observed server has the widest posterior
+
+
+def test_richer_features_are_recorded_and_learned():
+    import random
+    d = make_policy("greedy_ewma", n=2, nominal_mus=(1, 1), rng=random.Random(0), latency_scale=0.01,
+                    np_rng=np.random.default_rng(0))
+    s, x = d.choose(0.0, [3, 0], 1)
+    assert len(x) == 3 and x[0] == 1.0 and x[1] == float([3, 0][s])
+    d.observe(s, 0.05, x, 0.1)
+    assert d._ewma[s] == pytest.approx(5.0)    # latency 0.05 s / scale 0.01 s

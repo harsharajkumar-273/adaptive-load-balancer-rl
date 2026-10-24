@@ -116,6 +116,26 @@ def _draw_service(sc: Scenario, n: int, rng: np.random.Generator) -> np.ndarray:
     return rng.lognormal(-sigma2 / 2.0, math.sqrt(sigma2), n)
 
 
+def window_burst_stats(times, servers, n_servers: int, window: float, min_arrivals: int = 5):
+    """
+    Herding as burst concentration: split time into windows of length `window`
+    (the snapshot period when state is stale) and return the mean and 95th
+    percentile, over windows, of the busiest server's share of that window's
+    arrivals. Independent uniform routing over N servers gives about 1/N plus
+    sampling noise; a stampede onto one server gives about 1.
+    """
+    ids = (np.asarray(times) / window).astype(int)
+    ids -= ids.min()
+    counts = np.bincount(ids * n_servers + np.asarray(servers), minlength=(ids.max() + 1) * n_servers)
+    counts = counts.reshape(-1, n_servers)
+    totals = counts.sum(axis=1)
+    keep = totals >= min_arrivals
+    if not keep.any():
+        return float("nan"), float("nan")
+    share = counts[keep].max(axis=1) / totals[keep]
+    return float(share.mean()), float(np.percentile(share, 95))
+
+
 class ClusterView:
     """What probing policies may observe: live RIF and each server's latency estimate."""
 
@@ -167,7 +187,7 @@ def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[D
     dispatchers = [
         make_policy(policy, n=n, nominal_mus=sc.mus, latency_scale=mean_service,
                     rng=random.Random(seed * 100_003 + d), np_rng=np.random.default_rng([seed, d]),
-                    view=view, **policy_kwargs)
+                    view=view, num_dispatchers=sc.num_dispatchers, **policy_kwargs)
         for d in range(sc.num_dispatchers)
     ]
 
@@ -183,6 +203,7 @@ def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[D
     joined_queue = []
     burst_bins = []
     burst_servers = []
+    arrival_times = []
 
     for j in range(n_req):
         t = arrivals[j]
@@ -208,9 +229,11 @@ def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[D
                 snap[d] = cached
                 snap_time[d] = tk
                 snap_version[d] += 1
+            dispatchers[d].snapshot_age = t - snap_time[d]
         else:
             snap[d] = [view.queue_at(s, t) for s in range(n)]
             snap_version[d] += 1
+            dispatchers[d].snapshot_age = 0.0
 
         # 3. Route.
         s, feat = dispatchers[d].choose(t, snap[d], snap_version[d])
@@ -231,8 +254,11 @@ def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[D
             joined_queue.append(queue_joined)
             burst_bins.append(int(t / BURST_BIN_SEC))
             burst_servers.append(s)
+            arrival_times.append(t)
 
     row = _summarize(sc, policy, seed, latencies, joined_queue, burst_bins, burst_servers)
+    window = max(sc.staleness, BURST_BIN_SEC / 5) if sc.staleness > 0 else BURST_BIN_SEC
+    row["window_share_mean"], row["window_share_p95"] = window_burst_stats(arrival_times, burst_servers, n, window)
     row["probes_per_request"] = view.probes / max(1, n_req)
     return row
 

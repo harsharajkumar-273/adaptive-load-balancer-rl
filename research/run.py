@@ -5,6 +5,9 @@ Experiment runner: expands an experiment grid, runs it in parallel, writes CSV.
     python -m research.run robust        # heavy-tailed service x bursty arrivals
     python -m research.run frontier      # P99 vs probes/request: Prequal vs learned power-of-d probing
     python -m research.run probing       # probing policies (Prequal, power-of-d) vs number of gateways
+    python -m research.run models        # richer latency models and LinUCB: do conclusions hold?
+    python -m research.run llm           # LLM serving: prefix-cache routers, 2 workload regimes
+    python -m research.run llm_regimes   # LLM serving: 108 regimes, tuned-threshold regret
     python -m research.run epoch         # control-interval ablation for ts_epoch
     python -m research.run load          # utilisation sweep
     python -m research.run tuning        # hyperparameter sensitivity (learned policies and Prequal)
@@ -25,6 +28,7 @@ from typing import Dict, Iterable, List, Tuple
 
 import math
 
+from research.llm_sim import LLMScenario, THRESHOLDS, simulate_llm
 from research.policies import ALL_POLICIES
 from research.sim import Scenario, simulate
 
@@ -51,7 +55,7 @@ def _grid_main(quick: bool) -> Iterable[Job]:
         yield ("main", _scenario(scen, staleness=st, num_dispatchers=k, desync=desync), pol, seed, {})
 
 
-ROBUST_POLICIES = ["jsq", "p2c", "greedy", "ts", "p2c_learned", "p2c_learned+lc", "ts+lc",
+ROBUST_POLICIES = ["jsq", "p2c", "greedy", "ts", "p2c_learned", "p2c_learned+lc", "ts+lc", "awf", "awf_learned",
                    "prequal", "p2c_learned_probe", "p3c_learned_probe", "p3c_probe", "sed3_probe"]
 
 
@@ -85,7 +89,7 @@ def _grid_frontier(quick: bool) -> Iterable[Job]:
             yield ("frontier", sc, "p2c_learned", seed, {"d": d, "probe": True})
             yield ("frontier", sc, "probe_d", seed, {"d": d})
             yield ("frontier", sc, "probe_d", seed, {"d": d, "score": "sed"})
-        for pol in ["p2c", "p2c_learned", "p2c_learned+lc", "ts+lc"]:
+        for pol in ["p2c", "p2c_learned", "p2c_learned+lc", "ts+lc", "awf", "awf_learned"]:
             yield ("frontier", sc, pol, seed, {})
 
 
@@ -99,7 +103,7 @@ def _grid_epoch(quick: bool) -> Iterable[Job]:
 def _grid_load(quick: bool) -> Iterable[Job]:
     seeds = range(2 if quick else 10)
     policies = ["wrandom", "jsq", "p2c", "greedy", "ts", "p2c_learned", "greedy+lc", "ts+lc",
-                "p2c_learned+lc", "prequal", "p3c_learned_probe"]
+                "p2c_learned+lc", "awf", "awf_learned", "prequal", "p3c_learned_probe"]
     for rho, pol, seed in itertools.product([0.5, 0.7, 0.8, 0.9, 0.95], policies, seeds):
         sc = Scenario(rho=rho, staleness=0.05, num_dispatchers=16)
         yield ("load", sc, pol, seed, {})
@@ -122,13 +126,56 @@ def _grid_tuning(quick: bool) -> Iterable[Job]:
             yield ("tuning", sc, pol, seed, {param: v})
 
 
-GRIDS = {"main": _grid_main, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
+LLM_REGIMES = {"moderate": dict(zipf=1.1, rate=75.0), "hot_prefix": dict(zipf=1.4, rate=90.0)}
+LLM_MAIN_POLICIES = ["jsq", "p2c", "hash", "affinity", "affinity_thr4", "affinity_thr16", "greedy_learned",
+                     "ts_learned", "p2c_learned", "p3c_learned", "ring2_learned", "ring3_learned",
+                     "affinity_p2c_learned", "affinity+lc", "greedy_learned+lc", "ring2_learned+lc"]
+
+
+def _grid_llm(quick: bool) -> Iterable[Job]:
+    seeds = range(2 if quick else 10)
+    ks = [1, 16] if quick else [1, 4, 16, 64]
+    for (name, regime), k, st, desync, gray, pol, seed in itertools.product(
+            LLM_REGIMES.items(), ks, [0.0, 0.05, 0.2], [False, True], [False, True], LLM_MAIN_POLICIES, seeds):
+        if desync and st == 0.0:
+            continue
+        sc = LLMScenario(num_dispatchers=k, staleness=st, desync=desync,
+                         slow_replica=0 if gray else None, **regime)
+        yield ("llm", sc, pol, seed, {})
+
+
+def _grid_llm_regimes(quick: bool) -> Iterable[Job]:
+    """108 workload regimes; thresholds are chosen on seeds 0-4 and every policy is evaluated on seeds 5-9."""
+    seeds = range(5, 7) if quick else range(10)
+    policies = ([f"affinity_thr{t}" for t in THRESHOLDS]
+                + ["affinity", "jsq", "greedy_learned", "ring2_learned", "ring3_learned",
+                   "affinity_p2c_learned", "p2c_learned", "ring2_learned+lc", "greedy_learned+lc"])
+    zipfs, rates, caches = ([1.1], [75.0], [24]) if quick else ([0.8, 1.1, 1.4], [60.0, 75.0, 90.0], [16, 24, 48])
+    for z, rate, c, st, gray, pol, seed in itertools.product(zipfs, rates, caches, [0.05, 0.2], [False, True],
+                                                             policies, seeds):
+        sc = LLMScenario(zipf=z, rate=rate, cache_size=c, staleness=st, slow_replica=0 if gray else None)
+        yield ("llm_regimes", sc, pol, seed, {})
+
+
+MODEL_POLICIES = ["greedy", "greedy_q2", "greedy_ewma", "linucb", "linucb_ewma", "ts",
+                  "p2c_learned", "p2c_learned_q2", "p2c_learned_ewma",
+                  "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma"]
+
+
+def _grid_models(quick: bool) -> Iterable[Job]:
+    seeds = range(2 if quick else 10)
+    for scen, st, desync, pol, seed in itertools.product(
+            ["steady", "gray"], [0.05, 0.2], [False, True], MODEL_POLICIES, seeds):
+        yield ("models", _scenario(scen, staleness=st, num_dispatchers=16, desync=desync), pol, seed, {})
+
+
+GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
          "epoch": _grid_epoch, "load": _grid_load, "tuning": _grid_tuning}
 
 
 def _run(job: Job) -> Dict:
     exp, sc, pol, seed, kw = job
-    row = simulate(sc, pol, seed=seed, policy_kwargs=kw)
+    row = (simulate_llm if isinstance(sc, LLMScenario) else simulate)(sc, pol, seed=seed, policy_kwargs=kw)
     row["experiment"] = exp
     row["policy_kwargs"] = ";".join(f"{k}={v}" for k, v in sorted(kw.items()))
     return row
@@ -145,10 +192,12 @@ def run_experiment(name: str, quick: bool = False, workers: int = os.cpu_count()
             rows.append(row)
             if i % 100 == 0 or i == len(jobs):
                 print(f"[{name}] {i}/{len(jobs)} runs, {time.time() - started:.0f}s", flush=True)
-    rows.sort(key=lambda r: (r["scenario"], r["staleness"], r["num_dispatchers"], r["desync"], r["rho"],
-                             r["service_cv"], r["burstiness"], r["policy"], r["policy_kwargs"], r["seed"]))
+    keys = ("scenario", "staleness", "num_dispatchers", "desync", "rho", "service_cv", "burstiness",
+            "zipf", "rate", "cache_size", "policy", "policy_kwargs", "seed")
+    rows.sort(key=lambda r: tuple(str(r.get(k, "")) if isinstance(r.get(k, ""), str) else r.get(k, 0) for k in keys))
+    fieldnames = list(dict.fromkeys(k for r in rows for k in r))
     with open(out, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     print(f"[{name}] wrote {out}")

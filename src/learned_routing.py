@@ -32,17 +32,23 @@ _SAMPLE_SIZE = {"p2c_learned": 2, "p3c_learned": 3}
 class LatencyModel:
     """
     Independent discounted Bayesian linear regressions, one per server:
-        y = latency / latency_scale ~ theta_s . [1, q]
+        y = latency / latency_scale ~ theta_s . x
+    with feature vector x = [1, q] (dim=2, the default; q is the queue length) or
+    any dim-dimensional vector whose first entry is 1 (e.g. [1, q, cache_hit]).
     Prior N(0, sigma2/lam I). Sufficient statistics are discounted by `gamma`
     on every update of that server so the model tracks drift.
+
+    Feature arguments: for dim=2 a scalar q is accepted everywhere (and a list of
+    q's for predict_*); for any dim, predict_* also accept an (n, dim) matrix with
+    one feature row per server, and update() accepts a length-dim vector.
     """
 
-    def __init__(self, n: int, lam: float = 1.0, sigma2: float = 1.0, gamma: float = 0.995):
-        self.n, self.lam, self.sigma2, self.gamma = 0, lam, sigma2, gamma
-        self.A = np.zeros((0, 2, 2))
-        self.b = np.zeros((0, 2))
-        self.theta = np.zeros((0, 2))
-        self.chol = np.zeros((0, 2, 2))
+    def __init__(self, n: int, lam: float = 1.0, sigma2: float = 1.0, gamma: float = 0.995, dim: int = 2):
+        self.n, self.lam, self.sigma2, self.gamma, self.dim = 0, lam, sigma2, gamma, dim
+        self.A = np.zeros((0, dim, dim))
+        self.b = np.zeros((0, dim))
+        self.theta = np.zeros((0, dim))
+        self.chol = np.zeros((0, dim, dim))
         self.ensure_size(n)
 
     def ensure_size(self, n: int) -> None:
@@ -50,37 +56,56 @@ class LatencyModel:
         extra = n - self.n
         if extra <= 0:
             return
-        self.A = np.concatenate([self.A, np.zeros((extra, 2, 2))])
-        self.b = np.concatenate([self.b, np.zeros((extra, 2))])
-        self.theta = np.concatenate([self.theta, np.zeros((extra, 2))])
-        prior_chol = np.eye(2) * math.sqrt(self.sigma2 / self.lam)
+        d = self.dim
+        self.A = np.concatenate([self.A, np.zeros((extra, d, d))])
+        self.b = np.concatenate([self.b, np.zeros((extra, d))])
+        self.theta = np.concatenate([self.theta, np.zeros((extra, d))])
+        prior_chol = np.eye(d) * math.sqrt(self.sigma2 / self.lam)
         self.chol = np.concatenate([self.chol, np.tile(prior_chol, (extra, 1, 1))])
         self.n = n
 
-    def update(self, s: int, q: float, y: float) -> None:
-        x = np.array([1.0, q])
+    def _row(self, v) -> np.ndarray:
+        if self.dim == 2 and np.ndim(v) == 0:
+            return np.array([1.0, v])
+        return np.asarray(v, dtype=float)
+
+    def update(self, s: int, v, y: float) -> None:
+        x = self._row(v)
         self.A[s] = self.gamma * self.A[s] + np.outer(x, x)
         self.b[s] = self.gamma * self.b[s] + y * x
-        p = self.A[s] + self.lam * np.eye(2)
-        det = p[0, 0] * p[1, 1] - p[0, 1] * p[1, 0]
-        inv = np.array([[p[1, 1], -p[0, 1]], [-p[1, 0], p[0, 0]]]) / det
-        self.theta[s] = inv @ self.b[s]
-        cov = self.sigma2 * inv
-        l11 = math.sqrt(cov[0, 0])
-        l21 = cov[1, 0] / l11
-        l22 = math.sqrt(max(cov[1, 1] - l21 * l21, 1e-12))
-        self.chol[s] = [[l11, 0.0], [l21, l22]]
+        if self.dim == 2:   # closed form: this runs on every request
+            p = self.A[s] + self.lam * np.eye(2)
+            det = p[0, 0] * p[1, 1] - p[0, 1] * p[1, 0]
+            inv = np.array([[p[1, 1], -p[0, 1]], [-p[1, 0], p[0, 0]]]) / det
+            self.theta[s] = inv @ self.b[s]
+            cov = self.sigma2 * inv
+            l11 = math.sqrt(cov[0, 0])
+            l21 = cov[1, 0] / l11
+            l22 = math.sqrt(max(cov[1, 1] - l21 * l21, 1e-12))
+            self.chol[s] = [[l11, 0.0], [l21, l22]]
+        else:
+            p = self.A[s] + self.lam * np.eye(self.dim)
+            inv = np.linalg.inv(p)
+            self.theta[s] = inv @ self.b[s]
+            cov = self.sigma2 * (inv + inv.T) / 2.0
+            self.chol[s] = np.linalg.cholesky(cov + 1e-12 * np.eye(self.dim))
 
-    def predict(self, s: int, q: float) -> float:
-        return float(self.theta[s, 0] + self.theta[s, 1] * q)
+    def predict(self, s: int, v) -> float:
+        return float(self.theta[s] @ self._row(v))
 
-    def predict_mean(self, q: Sequence[float]) -> np.ndarray:
-        return self.theta[:, 0] + self.theta[:, 1] * np.asarray(q, dtype=float)
+    def _matrix(self, X) -> np.ndarray:
+        X = np.asarray(X, dtype=float)
+        if X.ndim == 1 and self.dim == 2:      # list of queue lengths, one per server
+            return np.stack([np.ones_like(X), X], axis=1)
+        return X
 
-    def predict_sample(self, q: Sequence[float], np_rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
-        z = np_rng.standard_normal((self.n, 2)) * scale
+    def predict_mean(self, X) -> np.ndarray:
+        return np.einsum("nd,nd->n", self.theta, self._matrix(X))
+
+    def predict_sample(self, X, np_rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
+        z = np_rng.standard_normal((self.n, self.dim)) * scale
         th = self.theta + np.einsum("nij,nj->ni", self.chol, z)
-        return th[:, 0] + th[:, 1] * np.asarray(q, dtype=float)
+        return np.einsum("nd,nd->n", th, self._matrix(X))
 
 
 class LearnedRouter:

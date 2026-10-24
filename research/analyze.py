@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 
+from typing import Dict, Optional
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -46,6 +48,8 @@ LABELS = {
     "ts_epoch": "Thompson (150 ms epochs)",
     "p2c_learned": "P2C over learned scores",
     "p3c_learned": "P3C over learned scores",
+    "awf": "age-aware split (nominal rates)",
+    "awf_learned": "age-aware split (learned rates)",
     "p2c_learned_probe": "learned P2C, probing (2 probes)",
     "p3c_learned_probe": "learned P3C, probing (3 probes)",
     "prequal": "Prequal (3 probes)",
@@ -59,6 +63,8 @@ CLASSIC_PROBING = {  # variant -> (base colour key, linestyle, marker)
     "p3c_probe": ("p2c", ":", "^"),
     "sed3_probe": ("sed", ":", "^"),
 }
+# Age-aware stochastic splits share the colour of the policy that uses the same information.
+AGE_AWARE = {"awf": ("sed", "-.", "D"), "awf_learned": ("p2c_learned", "-.", "D")}
 POWER_OF_D = {  # variant -> (linestyle, marker)
     "p2c_learned": ("-", "o"),
     "p3c_learned": ("-.", "D"),
@@ -82,6 +88,10 @@ def style(name: str) -> dict:
     lc = name.endswith("+lc")
     base = name.replace("+lc", "")
     label = LABELS[base] + (" + local correction" if lc else "")
+    if base in AGE_AWARE:
+        key, ls, marker = AGE_AWARE[base]
+        return dict(color=COLORS[key], linestyle="--" if lc else ls, marker=marker, label=label, linewidth=1.8,
+                    markersize=5)
     if base in CLASSIC_PROBING:
         key, ls, marker = CLASSIC_PROBING[base]
         return dict(color=COLORS[key], linestyle=ls, marker=marker, label=label, linewidth=1.8, markersize=5)
@@ -306,6 +316,278 @@ def real_system_section(out, real: pd.DataFrame, sim_main: pd.DataFrame, sim_pro
                  "\n".join(f"- {k}: {int(v)}" for k, v in cens.items()))
 
 
+
+# ----------------------------------------------------------------------------
+# LLM serving, model ablation, theory validation
+# ----------------------------------------------------------------------------
+
+LLM_STYLE = {  # policy -> (colour, linestyle, marker, label)
+    "jsq": ("#2a78d6", "-", "o", "JSQ (cache-oblivious)"),
+    "p2c": ("#1baf7a", "-", "o", "P2C (cache-oblivious)"),
+    "hash": ("#8a8984", "-", "o", "static hash by prefix"),
+    "affinity": ("#eb6834", "-", "o", "prefix affinity"),
+    "affinity_thr1": ("#eda100", ":", "v", "affinity + load threshold T=1"),
+    "affinity_thr2": ("#eda100", ":", "^", "affinity + load threshold T=2"),
+    "affinity_thr4": ("#eda100", "-", "o", "affinity + load threshold T=4"),
+    "affinity_thr8": ("#eda100", "--", "s", "affinity + load threshold T=8"),
+    "affinity_thr16": ("#eda100", "-.", "D", "affinity + load threshold T=16"),
+    "affinity_thr32": ("#eda100", (0, (1, 3)), "<", "affinity + load threshold T=32"),
+    "greedy_learned": ("#e87ba4", "-", "o", "learned greedy"),
+    "ts_learned": ("#4a3aa7", "-", "o", "learned Thompson"),
+    "p2c_learned": ("#008300", ":", "s", "learned P2C over any 2 replicas"),
+    "ring2_learned": ("#008300", "-", "o", "learned ring-2"),
+    "ring3_learned": ("#008300", "--", "D", "learned ring-3"),
+    "affinity_p2c_learned": ("#e34948", "-", "o", "learned P2C: one holder + random"),
+}
+LLM_HEAD = ["jsq", "hash", "affinity", "affinity_thr4", "greedy_learned", "ring2_learned", "ring3_learned",
+            "affinity_p2c_learned"]
+LLM_REGIME_NAMES = {(1.1, 75.0): "moderate skew (zipf 1.1, 75 req/s)", (1.4, 90.0): "hot prefix (zipf 1.4, 90 req/s)"}
+LLM_THRESHOLDS = [f"affinity_thr{t}" for t in (1, 2, 4, 8, 16, 32)]
+
+
+def _llm_line(ax, frame, policy, x, xs, metric="p99_ms"):
+    color, ls, marker, label = LLM_STYLE[policy]
+    sub = agg(frame[frame.policy == policy], [x], metric).sort_values(x)
+    if sub.empty:
+        return
+    pos = [xs.index(v) for v in sub[x]]
+    ax.plot(pos, sub["median"], color=color, linestyle=ls, marker=marker, label=label, linewidth=1.8, markersize=5)
+    ax.fill_between(pos, sub["q25"], sub["q75"], color=color, alpha=0.10, linewidth=0)
+
+
+def llm_staleness_figure(df: pd.DataFrame, k: int = 16) -> None:
+    d = df[(df.num_dispatchers == k) & (~df.desync)]
+    st = sorted(d.staleness.unique())
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.4), sharey=True)
+    for r, ((zipf, rate), name) in enumerate(LLM_REGIME_NAMES.items()):
+        for c, (scen, scen_name) in enumerate((("llm", "healthy replicas"), ("llm_gray", "one replica slows to 25% at t=20 s"))):
+            ax = axes[r, c]
+            frame = d[(d.zipf == zipf) & (d.rate == rate) & (d.scenario == scen)]
+            for pol in LLM_HEAD:
+                _llm_line(ax, frame, pol, "staleness", st)
+            ax.set_title(f"{name}; {scen_name}", color=TEXT, fontsize=10, loc="left")
+            _axes_style(ax, "shared-state refresh period" if r == 1 else "", "P99 TTFT (ms, log)" if c == 0 else "")
+            ax.set_xticks(range(len(st)))
+            ax.set_xticklabels([staleness_label(v) for v in st])
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.suptitle(f"LLM serving: prefix-cache routers, {k} routers, 8 prefill replicas", color=TEXT, fontsize=12,
+                 x=0.01, ha="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig11_llm_staleness.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+
+def regret_tables(df: pd.DataFrame):
+    """
+    Regret of every policy against the best fixed-threshold router in each of the
+    workload regimes. Held-out: the threshold T is chosen on seeds 0-4 and every
+    policy is evaluated on seeds 5-9. In-sample: T is chosen on the evaluation
+    seeds themselves (favours the thresholds).
+    """
+    keys = ["zipf", "rate", "cache_size", "staleness", "scenario"]
+    sel = df[df.seed < 5].groupby(keys + ["policy"]).p99_ms.median().unstack()
+    ev = df[df.seed >= 5].groupby(keys + ["policy"]).p99_ms.median().unstack()
+    best_t = sel[LLM_THRESHOLDS].idxmin(axis=1)
+    ref_held = pd.Series([ev.loc[k, best_t.loc[k]] for k in ev.index], index=ev.index)
+    held = ev.div(ref_held, axis=0)
+    insample = ev.div(ev[LLM_THRESHOLDS].min(axis=1), axis=0)
+    return held, insample, best_t
+
+
+def llm_regret_figure(held: pd.DataFrame) -> None:
+    fig, ax = plt.subplots(figsize=(8.6, 4.6))
+    n = len(held)
+    for pol in LLM_THRESHOLDS:       # fixed thresholds: thin, one hue (they are one family)
+        r = np.sort(held[pol].to_numpy())
+        ax.plot(r, np.arange(1, n + 1) / n, color="#eda100", linewidth=1.0, alpha=0.8,
+                label="fixed threshold T (1, 2, 4, 8, 16, 32)" if pol == LLM_THRESHOLDS[0] else None)
+    for pol in ["affinity", "greedy_learned", "ring2_learned", "ring3_learned", "affinity_p2c_learned"]:
+        color, ls, marker, label = LLM_STYLE[pol]
+        r = np.sort(held[pol].to_numpy())
+        ax.plot(r, np.arange(1, n + 1) / n, color=color, linestyle=ls, linewidth=2.0, label=label)
+    ax.set_xscale("log")
+    ax.axvline(1.0, color=MUTED, linewidth=0.8)
+    _axes_style(ax, "P99 relative to the best tuned threshold in that regime (log)", "fraction of regimes ≤ x", logy=False)
+    ax.set_xlim(0.6, 200)
+    ax.legend(frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    ax.set_title(f"Tuning-free robustness across {n} workload regimes (threshold tuned on held-out seeds)",
+                 color=TEXT, fontsize=11, loc="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig12_llm_regret.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+
+def llm_section(out, llm: Optional[pd.DataFrame], regimes: Optional[pd.DataFrame]) -> None:
+    if llm is not None:
+        llm_staleness_figure(llm)
+        order = [p for p in LLM_STYLE if p in set(llm.policy)] + [p for p in llm.policy.unique() if p not in LLM_STYLE]
+        for (zipf, rate), name in LLM_REGIME_NAMES.items():
+            for scen, sname in (("llm", "healthy"), ("llm_gray", "gray failure")):
+                for phase, pname in ((False, "synchronised"), (True, "unsynchronised")):
+                    sub = llm[(llm.zipf == zipf) & (llm.rate == rate) & (llm.scenario == scen)
+                              & (llm.num_dispatchers == 16) & ((llm.desync == phase) | (llm.staleness == 0))]
+                    _section(out, f"LLM serving, {name}, {sname}, {pname} refresh, 16 routers: P99 TTFT (ms)",
+                             table(sub, "policy", "staleness", "p99_ms", order, sorted(sub.staleness.unique())))
+                    if not phase and scen == "llm":
+                        _section(out, f"LLM serving, {name}, healthy, 16 routers: cache hit rate (median)",
+                                 table(sub.assign(hit_pct=sub.hit_rate * 100), "policy", "staleness", "hit_pct",
+                                       order, sorted(sub.staleness.unique())))
+            sub = llm[(llm.zipf == zipf) & (llm.rate == rate) & (llm.scenario == "llm") & (llm.staleness == 0.05)
+                      & (~llm.desync)]
+            _section(out, f"LLM serving, {name}, healthy, 50 ms staleness: P99 TTFT (ms) vs. routers",
+                     table(sub, "policy", "num_dispatchers", "p99_ms", order, sorted(sub.num_dispatchers.unique())))
+    if regimes is not None:
+        held, insample, best_t = regret_tables(regimes)
+        llm_regret_figure(held)
+        pols = LLM_THRESHOLDS + ["affinity", "jsq", "greedy_learned", "ring2_learned", "ring3_learned",
+                                 "affinity_p2c_learned", "p2c_learned", "ring2_learned+lc", "greedy_learned+lc"]
+        rows = ["| policy | median | 90th pct | worst | regimes within 1.5× |", "|:---|:---:|:---:|:---:|:---:|"]
+        for pol in pols:
+            if pol not in held:
+                continue
+            r = held[pol]
+            rows.append(f"| {pol} | {r.median():.2f}× | {r.quantile(0.9):.2f}× | {r.max():.1f}× | "
+                        f"{(r <= 1.5).mean() * 100:.0f}% |")
+        _section(out, f"LLM serving: P99 relative to the best tuned threshold, {len(held)} regimes "
+                      f"(threshold chosen on seeds 0-4, policies evaluated on seeds 5-9)", "\\n".join(rows))
+        rows = ["| policy | median | 90th pct | worst |", "|:---|:---:|:---:|:---:|"]
+        for pol in pols:
+            if pol in insample:
+                r = insample[pol]
+                rows.append(f"| {pol} | {r.median():.2f}× | {r.quantile(0.9):.2f}× | {r.max():.1f}× |")
+        _section(out, "Same, with the threshold chosen in hindsight on the evaluation seeds (favours thresholds)",
+                 "\\n".join(rows))
+        counts = best_t.str.replace("affinity_thr", "T=").value_counts()
+        _section(out, "Which fixed threshold was best (held-out selection): no single value is safe",
+                 "\\n".join(f"- {k}: {v} regimes" for k, v in counts.items()))
+
+
+MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma"], "learned greedy"),
+                  ("linucb", ["linucb", None, "linucb_ewma"], "LinUCB (optimistic)"),
+                  ("p2c", ["p2c_learned", "p2c_learned_q2", "p2c_learned_ewma"], "learned P2C"),
+                  ("p3c", ["p3c_learned", "p3c_learned_q2", "p3c_learned_ewma"], "learned P3C")]
+MODEL_COLORS = {"greedy": "#eb6834", "linucb": "#e87ba4", "p2c": "#008300", "p3c": "#4a3aa7"}
+MODEL_FEATURES = ["q", "q²", "q + own latency"]
+
+
+def models_section(out, df: pd.DataFrame) -> None:
+    fig, axes = plt.subplots(1, 4, figsize=(15.5, 4.2), sharey=True)
+    cells = [("steady", 0.05), ("steady", 0.2), ("gray", 0.05), ("gray", 0.2)]
+    for ax, (scen, st) in zip(axes, cells):
+        frame = df[(df.scenario == scen) & (df.staleness == st) & (~df.desync)]
+        for fam, pols, label in MODEL_FAMILIES:
+            xs, med, lo, hi = [], [], [], []
+            for i, pol in enumerate(pols):
+                if pol is None:
+                    continue
+                v = frame[frame.policy == pol].p99_ms
+                if v.empty:
+                    continue
+                xs.append(i); med.append(v.median()); lo.append(v.quantile(0.25)); hi.append(v.quantile(0.75))
+            ax.plot(xs, med, color=MODEL_COLORS[fam], marker="o", linewidth=1.8, markersize=5, label=label)
+            ax.fill_between(xs, lo, hi, color=MODEL_COLORS[fam], alpha=0.10, linewidth=0)
+        ax.set_xticks(range(3))
+        ax.set_xticklabels(MODEL_FEATURES, fontsize=8)
+        ax.set_title(f"{scen}, {staleness_label(st)} staleness", color=TEXT, fontsize=10, loc="left")
+        _axes_style(ax, "latency-model features", "P99 latency (ms, log)" if ax is axes[0] else "")
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.suptitle("The conclusions do not depend on the latency model (16 routers, synchronised refresh)",
+                 color=TEXT, fontsize=12, x=0.01, ha="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig14_models.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+    order = [p for _, pols, _ in MODEL_FAMILIES for p in pols if p] + ["ts"]
+    for scen in ("steady", "gray"):
+        for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
+            sub = df[(df.scenario == scen) & (df.desync == phase)]
+            _section(out, f"Model ablation, {scen}, {name} refresh, 16 routers: P99 (ms)",
+                     table(sub, "policy", "staleness", "p99_ms", [p for p in order if p in set(sub.policy)],
+                           sorted(sub.staleness.unique())))
+
+
+# Largest probability that any single server is chosen, for policies where it is known.
+def predicted_caps(n_servers: int, mus) -> Dict[str, float]:
+    return {"wrandom": max(mus) / sum(mus), "jsq": 1.0, "sed": 1.0,
+            "p2c": 2.0 / n_servers, "p2c_learned": 2.0 / n_servers, "p3c_learned": 3.0 / n_servers}
+
+
+def candidate_mass_llm(zipf: float, d: int, n: int = 8, num_prefixes: int = 64) -> float:
+    """kappa_max: the largest total popularity of prefixes whose d-replica ring includes one replica."""
+    from research.llm_sim import LLMScenario, prefix_probabilities, rendezvous_order
+    probs = prefix_probabilities(LLMScenario(zipf=zipf, num_prefixes=num_prefixes))
+    mass = np.zeros(n)
+    for c in range(num_prefixes):
+        for s in rendezvous_order(c, n)[:d]:
+            mass[s] += probs[c]
+    return float(mass.max())
+
+
+def theory_section(out, main: pd.DataFrame, llm: Optional[pd.DataFrame]) -> None:
+    from research.sim import DEFAULT_MUS
+    if "window_share_mean" not in main:
+        return
+    caps = predicted_caps(len(DEFAULT_MUS), DEFAULT_MUS)
+    sub = main[(main.scenario == "steady") & (main.num_dispatchers == 16) & (main.staleness == 0.2) & (~main.desync)]
+    sub = sub.dropna(subset=["window_share_mean"])
+    pols = [p for p in ["wrandom", "jsq", "sed", "p2c", "p2c_learned", "p3c_learned", "greedy", "ts", "ts_epoch",
+                        "awf", "awf_learned"] if p in set(sub.policy)]
+    rows = ["| policy | predicted cap | measured mean share | measured 95th pct |", "|:---|:---:|:---:|:---:|"]
+    fig, ax = plt.subplots(figsize=(8.0, 4.2))
+    for i, pol in enumerate(pols):
+        v = sub[sub.policy == pol]
+        mean, p95 = v.window_share_mean.median(), v.window_share_p95.median()
+        cap = caps.get(pol)
+        rows.append(f"| {pol} | {'–' if cap is None else f'{cap:.3f}'} | {mean:.2f} | {p95:.2f} |")
+        st = style(pol)
+        ax.barh(i, mean, color=st["color"], height=0.6)
+        if cap is not None:
+            ax.plot([cap, cap], [i - 0.4, i + 0.4], color=TEXT, linewidth=2.0)
+    ax.set_yticks(range(len(pols)))
+    ax.set_yticklabels([LABELS.get(p, p) for p in pols], fontsize=8)
+    ax.invert_yaxis()
+    ax.axvline(1.0 / len(DEFAULT_MUS), color=MUTED, linewidth=0.8, linestyle=":")
+    ax.set_xlim(0, 1.05)
+    _axes_style(ax, "busiest server's share of a 200 ms window's arrivals (bar: measured; black tick: Proposition 2 cap)",
+                "", logy=False)
+    ax.set_title("Burst concentration: measured vs. predicted caps (16 routers, 200 ms stale state)",
+                 color=TEXT, fontsize=11, loc="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig15_burst_share.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+    _section(out, "Burst concentration (queue model): busiest server's share of a 200 ms window, 16 routers, "
+                  "synchronised stale state", "\\n".join(rows))
+    if llm is not None and "window_share_mean" in llm:
+        rows = ["| policy | κ_max (cap) | measured mean share |", "|:---|:---:|:---:|"]
+        sub = llm[(llm.zipf == 1.1) & (llm.rate == 75.0) & (llm.scenario == "llm") & (llm.num_dispatchers == 16)
+                  & (llm.staleness == 0.2) & (~llm.desync)]
+        n = 8
+        for pol, kappa in [("hash", candidate_mass_llm(1.1, 1)), ("ring2_learned", candidate_mass_llm(1.1, 2)),
+                           ("ring3_learned", candidate_mass_llm(1.1, 3)), ("p2c_learned", 2.0 / n),
+                           ("p3c_learned", 3.0 / n), ("jsq", 1.0), ("affinity", None), ("greedy_learned", None)]:
+            v = sub[sub.policy == pol]
+            if v.empty:
+                continue
+            rows.append(f"| {pol} | {'–' if kappa is None else f'{kappa:.2f}'} | {v.window_share_mean.median():.2f} |")
+        _section(out, "Burst concentration (LLM scenario, moderate skew): κ_max = largest popularity mass of "
+                      "prefixes whose candidate set includes one replica, 16 routers, 200 ms windows", "\\n".join(rows))
+
+
+def awf_figure(df: pd.DataFrame) -> None:
+    d = df[df.num_dispatchers == 16]
+    panels = []
+    for scen, sname in (("steady", "steady"), ("gray", "gray failure")):
+        for phase, pname in ((False, "synchronised"), (True, "unsynchronised")):
+            frame = d[(d.scenario == scen) & ((d.desync == phase) | (d.staleness == 0))]
+            panels.append((f"{sname}, {pname} refresh", frame,
+                           ["sed", "jsq", "p2c_learned", "p3c_learned", "awf", "awf_learned"]))
+    multi_panels(panels, "staleness", "p99_ms",
+                 "Age-aware stochastic split vs. power-of-d over learned scores (16 gateways)",
+                 "shared-state refresh period", "P99 latency (ms, log)", "fig13_age_aware.png",
+                 xticks=sorted(d.staleness.unique()), categorical=True, tick_label=staleness_label, ncols=2)
+
+
 def fmt(med, lo, hi):
     return f"{med:,.0f} [{lo:,.0f}–{hi:,.0f}]"
 
@@ -391,6 +673,28 @@ def main():
             ph = steady[(steady.desync == phase) & (steady.num_dispatchers == k_ref)]
             _section(out, f"Steady state, {name} refresh: herding index (Fano factor), K={k_ref}",
                      table(ph, "policy", "staleness", "fano", TABLE_ORDER, st_ticks, digits=1))
+
+    if os.path.exists(main_csv):
+        mdf = pd.read_csv(main_csv)
+        mdf = pd.concat([mdf, mdf[mdf.staleness == 0.0].assign(desync=True)], ignore_index=True)
+        if "awf" in set(mdf.policy):
+            awf_figure(mdf)
+            for scen in ("steady", "gray"):
+                for phase, name in ((False, "synchronised"), (True, "unsynchronised")):
+                    sub = mdf[(mdf.scenario == scen) & (mdf.desync == phase) & (mdf.num_dispatchers == 16)]
+                    _section(out, f"Age-aware split, {scen}, {name} refresh, 16 gateways: P99 (ms)",
+                             table(sub, "policy", "staleness", "p99_ms",
+                                   ["sed", "jsq", "p2c_learned", "p3c_learned", "awf", "awf_learned"],
+                                   sorted(sub.staleness.unique())))
+        llm_df = pd.read_csv(os.path.join(RESULTS, "llm.csv")) if os.path.exists(os.path.join(RESULTS, "llm.csv")) else None
+        theory_section(out, pd.read_csv(main_csv), llm_df)
+    llm_path, regimes_path = os.path.join(RESULTS, "llm.csv"), os.path.join(RESULTS, "llm_regimes.csv")
+    if os.path.exists(llm_path) or os.path.exists(regimes_path):
+        llm_section(out, pd.read_csv(llm_path) if os.path.exists(llm_path) else None,
+                    pd.read_csv(regimes_path) if os.path.exists(regimes_path) else None)
+    models_path = os.path.join(RESULTS, "models.csv")
+    if os.path.exists(models_path):
+        models_section(out, pd.read_csv(models_path))
 
     frontier_csv = os.path.join(RESULTS, "frontier.csv")
     if os.path.exists(frontier_csv):

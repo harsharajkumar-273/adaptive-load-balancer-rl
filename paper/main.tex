@@ -97,32 +97,33 @@ whether learned routers, which add a second, slower feedback loop (the model),
 behave like JSQ, better, or worse.
 
 \paragraph{This paper.} We study herding in horizontally scaled learned
-routers and make four contributions:
+routers, in a queueing model, in an LLM-serving model with prefix caches, and
+on a multi-process prototype. Our contributions are:
 \begin{enumerate}
 \item \textbf{Characterisation.} Argmin routing on learned latency predictions
   herds \emph{worse} than classic JSQ under stale shared state
-  (\cref{sec:eval-herding}). Unlike JSQ, it is not fixed by desynchronising
-  gateway refresh phases once there are many gateways, and it is catastrophic at
-  high staleness. Publishing routing weights on a control interval, as
-  learned-router designs commonly do, adds staleness of its own
-  (\cref{sec:eval-epoch}).
-\item \textbf{Mechanism.} We separate herding \emph{within} one gateway (all
-  requests between refreshes go to the same argmin) from herding \emph{across}
-  gateways (independent gateways agree). Local accounting of a gateway's own
-  sends removes the first but not the second; per-request Thompson sampling
-  helps mainly because independently trained posteriors \emph{disagree}
-  (\cref{sec:mechanism}).
-\item \textbf{Design.} \emph{Learned power-of-$d$}: sample $d$ backends
-  uniformly, score them with the learned latency model, send to the best. The
-  sampling step caps any backend's share of arrivals at $d/N$ regardless of
-  staleness or gateway count (\cref{prop:cap}); the learned score recovers
-  server heterogeneity and tracks drift that static weights miss
-  (\cref{sec:design}).
-\item \textbf{Evaluation.} In simulation and on a multi-process prototype,
-  learned power-of-$d$ is the most robust snapshot-based policy we tested,
-  and its probing variant beats a Prequal-style prober~\citep{prequal2024} at
-  equal probe cost, while isolating how much of the gain comes from learning
-  versus from probing (\cref{sec:eval}).
+  (\cref{sec:eval-herding}). It is not fixed by desynchronising refresh phases
+  once there are many routers, and a control-plane interval, as learned
+  routers commonly use, adds staleness of its own (\cref{sec:eval-epoch}).
+\item \textbf{A burst bound.} Any policy that is a deterministic function of the
+  shared snapshot sends an entire refresh window to one server; any policy that
+  restricts each request to candidates drawn independently of the snapshot caps
+  a server's burst at $\kappa_s\lambda\Delta$ (\cref{sec:theory}). Measured
+  burst shares agree with both statements (\cref{sec:eval-burst}).
+\item \textbf{The learner is not the problem.} Richer latency models and
+  optimistic exploration do not fix argmin herding, and some make it much worse;
+  learned power-of-$d$ is insensitive to the model class (\cref{sec:eval-models}).
+\item \textbf{Remedies.} \emph{Learned power-of-$d$} (sample $d$ candidates,
+  rank them with the learned model) and an \emph{age-aware stochastic split}
+  that accounts for the arrivals the snapshot cannot yet reflect
+  (\cref{sec:design}). For LLM serving we add \emph{ring-$d$}, which draws the
+  candidates from a prefix's rendezvous-hash replicas to keep cache locality.
+\item \textbf{Evaluation.} Across the three settings the remedies are the most
+  robust routers we tested. In LLM serving, learned ring-$d$ stays within 2$\times$
+  of the best tuned prefix-affinity threshold in all 108 workload regimes with no
+  tuning, while every fixed threshold is at least 2.5$\times$ worse (up to
+  133$\times$) in some regime (\cref{sec:eval-llm}). Our probing variant beats a Prequal-style
+  prober~\citep{prequal2024} at equal probe cost (\cref{sec:eval-probing}).
 \end{enumerate}
 
 % ---------------------------------------------------------------------------
@@ -159,58 +160,102 @@ selected by a hot--cold lexicographic rule. Probing trades message cost for
 freshness.
 
 % ---------------------------------------------------------------------------
-\section{Why Learned Routers Herd}
-\label{sec:mechanism}
+\section{A Burst Bound for Routing on Shared State}
+\label{sec:theory}
 
-\paragraph{Temporal herding within a gateway.} Between two refreshes, a gateway's
-inputs do not change, so a deterministic argmin router sends \emph{every}
-request it receives in that window to the same backend: roughly
-$\lambda\Delta/K$ requests. Accounting for its own sends since the last
-refresh (\emph{local correction}) removes this.
+Requests arrive as a Poisson process of rate $\lambda$ and are spread uniformly
+over $K$ routers. All routers read the same snapshot, refreshed every $\Delta$.
+In one window between refreshes let $A\sim\mathrm{Poisson}(\lambda\Delta)$ be the
+arrivals and $B_s$ the number sent to server $s$.
 
-\paragraph{Spatial herding across gateways.} With a shared snapshot, all $K$
-gateways compute their argmin over the same queue lengths. For JSQ the
-argmin is identical across gateways, so the whole arrival stream,
-$\lambda\Delta$ requests, lands on one backend. Learned gateways differ
-slightly because each model was trained on different requests, but once models
-converge, their argmins agree. Local correction cannot help: a gateway does not
-see others' sends.
-
-\paragraph{Why learning can make it worse.} The learned model regresses latency
-on the \emph{snapshot} queue length. During herding, a backend with a short
-snapshot queue receives a burst and returns high latency; the model attributes
-that latency to a short queue and raises the backend's intercept, pushing
-traffic elsewhere, where the same thing happens. The model's own feedback
-loop is slower than the snapshot, so it amplifies rather than damps the
-oscillation. Per-request posterior sampling breaks ties differently in each
-gateway, but its noise shrinks as posteriors concentrate.
-
-\section{Learned Power-of-$d$}
-\label{sec:design}
-
-Learned power-of-$d$ samples $d$ backends uniformly at random, scores each with
-the posterior-mean predicted latency, and routes to the lowest. The snapshot
-variant uses the shared (stale) queue lengths as input; the probing variant
-reads the $d$ candidates' live queue lengths ($d$ probes per request).
-
-\begin{proposition}\label{prop:cap}
-Under learned power-of-$d$ with uniform candidate sampling, every backend
-receives any given request with probability at most $d/N$, independent of the
-staleness $\Delta$, the number of gateways $K$, the refresh phases and the
-learned model. Hence in any window the expected arrivals at one backend are at
-most $d/N$ of all arrivals, whereas under argmin routing on a shared snapshot
-they can be all of them.
+\begin{proposition}[Common information implies a stampede]\label{prop:stampede}
+If every router's choice is the same deterministic function of the common
+snapshot (JSQ, SED, and learned argmin routers whose models agree), then in every
+window all $A$ arrivals go to one server: $\max_s B_s=A$ and $\mathbb{E}[A]=\lambda\Delta$,
+for any number of routers $K$.
 \end{proposition}
 \begin{proof}
-A request is routed to $s$ only if $s$ is among its $d$ sampled candidates,
-which happens with probability $d/N$ because the $d$ are drawn uniformly
-without replacement, independently of all state.
+The same function applied to the same input returns the same server for every
+request in the window.
 \end{proof}
 
-The cap bounds the damage of stale or wrong information, but it is not free:
-with $d=2$ a slow backend can receive up to $2/N$ of the load. The learned
-score decides \emph{within} the sample, so heterogeneity is handled by the
-model while herding is bounded by the sampling.
+\begin{proposition}[A bounded candidate probability caps the burst]\label{prop:cap}
+Suppose each request is routed within a candidate set $S$ drawn independently of
+the snapshot and of earlier decisions, and let $\kappa_s=\Pr[s\in S]$. Then
+$B_s$ is stochastically dominated by a $\mathrm{Poisson}(\kappa_s\lambda\Delta)$
+variable. In particular $\mathbb{E}[B_s]\le\kappa_s\lambda\Delta$, and with
+$\mu=\kappa_s\lambda\Delta$, $\Pr[B_s\ge m]\le e^{-\mu}(e\mu/m)^m$ for $m>\mu$.
+For $d$ candidates drawn uniformly from $N$ servers, $\kappa_s=d/N$.
+\end{proposition}
+\begin{proof}
+Each arrival is a candidate for $s$ independently with probability $\kappa_s$ and
+can be routed to $s$ only then. $B_s$ is at most the number of such arrivals,
+which is a Poisson thinning of the arrival process.
+\end{proof}
+
+\paragraph{Consequences.} (i) The cap holds for any number of routers, any
+staleness, any refresh phases, and any learned model: the candidate draw does
+not read the snapshot. (ii) A burst of $B$ requests delays the last of them at a
+server of rate $\mu_s$ by at least $(B-\mu_s\Delta)^+/\mu_s$. With the
+parameters of our queueing study ($\lambda=900$\,req/s, $\Delta=200$\,ms) a
+deterministic router puts at least $(900-200)\cdot0.2/200=0.7$\,s on the fastest
+server, whereas $d=2$ of $N=8$ caps its burst at 45 requests, about what that
+server drains in a window. (iii) The cap bounds the damage of a \emph{wrong}
+ranking; it does not stop a slow server from receiving up to $\kappa_s$ of the
+traffic. Keeping slow servers out is the learned score's job.
+(iv) Learned argmin routers are not covered by \cref{prop:stampede} when their
+models differ, because the choice then depends on private state. How much that
+decorrelates the routers is an empirical question (\cref{sec:eval-burst}).
+(v) With request-dependent candidates, $\kappa_s$ is the probability that a
+request's candidate set contains $s$; for LLM serving it is the popularity mass of
+the prefixes whose candidate replicas include $s$ (\cref{sec:design}).
+
+\paragraph{Two mechanisms.} \emph{Within a router}, the inputs do not change
+between refreshes, so a deterministic argmin sends every request that router
+receives in the window, about $\lambda\Delta/K$ of them, to the same server.
+Counting its own sends since the last refresh (\emph{local correction})
+removes this. \emph{Across routers}, the shared snapshot makes all $K$ argmins
+agree (\cref{prop:stampede}), and local correction cannot help because a router
+does not see the others' sends. Learning can make this worse. The model
+regresses latency on the \emph{snapshot} queue length, so a burst sent to a
+server that looked short is attributed to a short queue; the model's own
+feedback loop is slower than the snapshot and amplifies the oscillation.
+
+\section{Remedies}
+\label{sec:design}
+
+\paragraph{Learned power-of-$d$.} Sample $d$ backends uniformly, score each with
+the posterior-mean predicted latency, route to the lowest. The snapshot variant
+scores with the shared (stale) queue lengths, the probing variant reads the $d$
+candidates' live queue lengths ($d$ probes per request). By \cref{prop:cap}
+any backend is a candidate with probability $d/N$.
+
+\paragraph{Age-aware stochastic split.} Instead of sampling candidates, each
+router can randomise \emph{how much} to send to each server. A request arriving
+$a$ seconds after the snapshot sees, in a fluid approximation where every router
+uses the same split $p$, queue $Q_i=\max(0,q_i+(\lambda p_i-\mu_i)a)$ at server $i$,
+hence expected delay $(Q_i+1)/\mu_i$. Equalising the delay at level $L$ gives
+\[
+p_i=\max\Bigl(0,\frac{\mu_i(L+a)-q_i-1}{\lambda a}\Bigr),\qquad \textstyle\sum_i p_i=1,
+\]
+which we solve exactly by sorting breakpoints. As $a\to0$ this tends to
+shortest-expected-delay, and as $a\to\infty$ to a capacity-proportional random
+split. Each router estimates $\lambda$ as $K$ times its own smoothed arrival
+rate. Service rates are the nominal ones or are learned: the slope of the
+latency model is the service time per queue slot. This is our own construction,
+in the spirit of stochastically coordinated dispatching~\citep{goren2021stochastic}
+but not their algorithm. It satisfies no a-priori cap, but its split
+approaches the capacity shares as the snapshot ages.
+
+\paragraph{Locality-preserving candidates for LLM serving.} Uniform sampling
+ignores the prefix cache, and in our LLM simulator it reaches a hit rate of only
+0.80--0.91 against 0.99 for the design below. \emph{Ring-$d$}
+draws the candidates from the $d$ replicas with the highest rendezvous hash for
+the request's prefix (the same $d$ at every router), then ranks them by a learned
+latency model with features $[1,\text{queue},\text{cache hit}]$. A prefix thus
+lives on at most $d$ replicas and the router balances load among them.
+By \cref{prop:cap}, $\kappa_s$ is the popularity mass of the prefixes whose ring
+contains $s$.
 
 % ---------------------------------------------------------------------------
 \section{Evaluation}
@@ -279,7 +324,7 @@ JSQ improves from 836 to 282\,ms. Learned greedy, however, still reaches
   \label{fig:gateways}
 \end{figure*}
 \Cref{fig:gateways} separates the two herding mechanisms from
-\cref{sec:mechanism}.
+\cref{sec:theory}.
 \begin{itemize}
 \item \textbf{Within a gateway.} With one gateway, learned greedy (630\,ms)
   and TS (763\,ms) are poor, because all of that gateway's requests between
@@ -292,6 +337,53 @@ JSQ improves from 836 to 282\,ms. Learned greedy, however, still reaches
 \item \textbf{Learned power-of-$d$.} P2C-L varies only between 151 and
   180\,ms across $K$, as \cref{prop:cap} predicts.
 \end{itemize}
+
+\subsection{Measured burst concentration}
+\label{sec:eval-burst}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig15_burst_share.png}
+  \caption{The busiest server's share of a 200\,ms window's arrivals (bars) against the
+  cap of \cref{prop:cap} (black ticks), 16 routers, synchronised stale state.}
+  \label{fig:burst}
+\end{figure}
+\Cref{fig:burst} tests \cref{prop:stampede,prop:cap} directly: for each 200\,ms
+window we take the busiest server's share of that window's arrivals.
+\TODO{fill burst-share numbers from summary.md after the final grid: wrandom,
+JSQ, SED, P2C, P2C-L, P3C-L, greedy, TS, age-aware.}
+
+\subsection{Richer models and optimism do not fix argmin herding}
+\label{sec:eval-models}
+A natural objection is that the learner is too simple. We repeat the
+comparison with a quadratic queue term, with the router's own smoothed latency
+for each server as a third feature, and with an optimistic (LinUCB-style,
+lower-confidence-bound) learner, at 50 and 200\,ms staleness with 16
+routers. \Cref{tab:models} summarises the steady-state results
+(\cref{fig:models} in the appendix has the full set).
+\begin{table}[t]
+\centering
+\small
+\caption{P99 latency (ms), 16 routers, synchronised refresh, steady state.}
+\label{tab:models}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{50\,ms stale} & \multicolumn{2}{c}{200\,ms stale}\\
+ & argmin & P2C/P3C & argmin & P2C/P3C\\
+\midrule
+queue only            & 1{,}055 & 151 / 141 & 12{,}537 & 238 / 279\\
++ queue$^2$           & 59{,}180 & 150 / 142 & 72{,}354 & 225 / 276\\
++ own latency         & 3{,}044 & 153 / 141 & 29{,}242 & 234 / 250\\
+LinUCB (queue only)   & 13{,}568 & -- & 15{,}618 & --\\
+LinUCB (+ own latency)& 19{,}418 & -- & 23{,}312 & --\\
+\bottomrule
+\end{tabular}
+\end{table}
+A richer model never rescues argmin routing, and the quadratic one makes it
+far worse, because its fit oscillates with the herding it causes. Optimism
+herds too (13.6\,s at 50\,ms). Power-of-$d$ ranges over 141--153\,ms at 50\,ms
+and 225--279\,ms at 200\,ms regardless of the model. This matches
+\cref{prop:stampede}: herding is a property of acting deterministically on
+common information, not of the learner.
 
 \subsection{Control intervals are hidden staleness}
 \label{sec:eval-epoch}
@@ -318,6 +410,7 @@ results repeat. With synchronised refresh at 200\,ms, greedy reaches 3.2\,s
 and TS 4.8\,s, while P2C-L stays at 411\,ms.
 
 \subsection{Probe cost, and learning versus probing}
+\label{sec:eval-probing}
 \begin{figure*}[t]
   \centering
   \includegraphics[width=\textwidth]{fig7_probe_frontier.png}
@@ -346,6 +439,79 @@ the sampling step supplies robustness to staleness.
 Probing policies do not scale equally. From 1 to 64 gateways, Prequal's P99
 rises from 89 to 186\,ms and P3C-L-probe's from 82 to 99\,ms. P3C-L-probe
 degrades with $K$ because each gateway learns from $1/K$ of the traffic.
+
+\subsection{Age-aware stochastic split}
+\label{sec:eval-awf}
+\TODO{fill from summary.md: age-aware split (nominal and learned rates) against
+SED, P2C-L, P3C-L under steady and gray failure, synchronised and
+unsynchronised, fig13.}
+
+\subsection{LLM serving with prefix caches}
+\label{sec:eval-llm}
+\paragraph{Setup.} $N=8$ prefill replicas, each a FIFO server with an LRU cache of
+24 prefixes. Requests have one of 64 shared prefixes (Zipf popularity;
+log-uniform length 500--4000 tokens) plus a unique suffix (mean 300 tokens).
+A replica that holds the prefix prefills only the suffix, otherwise the whole
+prompt, at 8{,}000 tokens/s plus 10\,ms. TTFT is queueing delay plus prefill
+time. Each of 16 routers sees a snapshot of every replica's queue length
+\emph{and} cached-prefix set, refreshed every $\Delta$, so cache metadata is as
+stale as load. We use two regimes, moderate skew (Zipf 1.1, 75\,req/s) and a hot
+prefix (Zipf 1.4, 90\,req/s), each with and without a gray failure (one replica
+slows to 25\% at $t{=}20$\,s). The learned routers fit one pooled model with
+features $[1,\text{queue},\text{cache hit}]$ per router. Baselines:
+cache-oblivious JSQ and P2C; static rendezvous hashing; prefix affinity (least
+loaded holder); and affinity with a load threshold $T$, the balance rule used in
+production LLM routers~\citep{vllmrouter}.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{fig11_llm_staleness.png}
+  \caption{P99 time to first token, 16 routers, 8 prefill replicas, synchronised refresh.}
+  \label{fig:llm}
+\end{figure*}
+\paragraph{Herding appears in the familiar places (\cref{fig:llm}).}
+Cache-oblivious routing loses locality (hit rate 0.75, P99 2.3\,s under
+moderate skew with live state), and static hashing concentrates the hot
+prefixes on single replicas (10.5\,s and 38\,s). Plain prefix affinity herds
+onto the replica that holds a hot prefix: 1.0\,s (moderate) and 26.9\,s (hot
+prefix) with live state, against 237 and 252\,ms for affinity with $T{=}4$.
+Staleness \emph{helps} plain affinity (377\,ms and 601\,ms at 200\,ms),
+apparently because stale cache metadata makes routers replicate hot prefixes
+onto more replicas by accident. Learned greedy is the best router with fresh
+state (203\,ms against 237\,ms for $T{=}4$ under moderate skew) but herds as
+state ages: 425\,ms at 50\,ms and 2.4\,s at 200\,ms.
+\paragraph{Ring-$d$ keeps both locality and balance.} Learned ring-3 stays at
+224/278/436\,ms (live, 50\,ms, 200\,ms) under moderate skew, close to
+affinity with $T{=}4$ (237/261/346\,ms), and with a gray failure it beats it at
+every staleness level (336/365/498\,ms against 479/540/594\,ms), since the
+learned model notices the slow replica. With the hot prefix the two are
+within 1.4$\times$ (ring-3 246/338/567\,ms; $T{=}4$ 252/285/485\,ms).
+Uniform power-of-two over all replicas keeps balance but loses locality (hit rate 0.80--0.91).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig12_llm_regret.png}
+  \caption{Cumulative distribution over 108 workload regimes of P99 relative to the best tuned
+  threshold in that regime (threshold chosen on held-out seeds).}
+  \label{fig:regret}
+\end{figure}
+\paragraph{No single threshold is safe, and ring-$d$ needs none (\cref{fig:regret}).}
+Production routers need a threshold $T$, and the right value depends on the
+workload. We sweep 108 regimes: Zipf in $\{0.8,1.1,1.4\}$, 60/75/90\,req/s,
+cache capacity in $\{16,24,48\}$, 50 or 200\,ms staleness, with and without a gray
+failure. For each regime we pick the best $T\in\{1,2,4,8,16,32\}$ on seeds 0--4 and
+evaluate every router on seeds 5--9. Five different values of $T$ win in
+different regimes ($T{=}4$ in 40, $T{=}2$ in 32, $T{=}8$ in 17, $T{=}16$ in 9, and
+$T{=}1$ and $T{=}32$ in 5 each). The best single value, $T{=}4$, has median
+regret $1.00\times$ and is within $1.5\times$ in 94\% of regimes, but is
+$11.2\times$ worse in the worst regime. Other fixed values are
+2.5$\times$ to 133$\times$ worse in their worst regime. Learned
+ring-2 has median regret 1.06$\times$, 90th percentile 1.30$\times$, 95\% of
+regimes within 1.5$\times$, and a worst case of 1.98$\times$; ring-3 has median
+1.04$\times$ and worst case 4.3$\times$. Learned greedy (median 2.9$\times$, worst 167$\times$) and plain
+affinity (median 3.5$\times$, worst 75$\times$) do not come close.
+Choosing the threshold in hindsight on the evaluation seeds, which favours the
+thresholds, gives the same picture.
 
 \subsection{Robustness}
 \paragraph{Heavy-tailed service.} We use lognormal service times with
@@ -460,9 +626,16 @@ scores with random candidate sampling, and publishing weights at short
 intervals or not at all.
 
 \section{Limitations}
-Our backends are single-server FIFO queues and the learned model has two
-features; real backends are multi-core, and richer context may change the
-ranking among learned policies. The Prequal baseline is our re-implementation
+Our backends are single-server FIFO queues; real backends are multi-core.
+Our latency models are linear, and although the quadratic, own-latency and
+optimistic variants do not change the conclusions, a deep model trained on
+rich request features might. The LLM-serving simulator models prefill
+replicas only: there is no batching, no decode phase, no KV-cache memory
+pressure beyond a prefix count, and one load signal (queue length). Its
+constants (8{,}000 tokens/s, Zipf popularity) are plausible, not measured from a
+production trace, and a real trace could change which regimes matter.
+The age-aware split needs the number of routers and a good estimate of the
+total arrival rate. The Prequal baseline is our re-implementation
 from the paper's description and is tuned in its favour, but it is not the
 production system. Our probing variants probe synchronously; with sub-millisecond
 service times the probe round-trip, which Prequal avoids, would matter more
@@ -480,6 +653,22 @@ score for \emph{ranking}, but let random candidate sampling decide
 \emph{which} backends are ranked. This bounds any backend's share of traffic
 independently of how stale or how widely shared the state is, and it keeps
 the benefit of learning when server speeds are unknown or change.
+
+\appendix
+\section{Additional results}
+\begin{figure*}[h]
+  \centering
+  \includegraphics[width=\textwidth]{fig14_models.png}
+  \caption{Latency-model ablation: P99 for learned greedy, LinUCB and learned P2C/P3C with
+  three feature sets (16 routers, synchronised refresh).}
+  \label{fig:models}
+\end{figure*}
+\begin{figure*}[h]
+  \centering
+  \includegraphics[width=\textwidth]{fig8_robustness.png}
+  \caption{Heavy-tailed service times and bursty arrivals (16 routers, 50\,ms staleness).}
+  \label{fig:robust}
+\end{figure*}
 
 \bibliographystyle{plainnat}
 \bibliography{refs}
