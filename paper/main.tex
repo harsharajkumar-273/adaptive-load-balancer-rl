@@ -48,26 +48,30 @@
 \fi
 
 \begin{abstract}
-Request routers in production are horizontally scaled: many gateway replicas
-route independently using the same, slightly stale view of backend load, and
-increasingly they score backends with learned latency models. Classic queueing
-results show that shortest-queue routing on stale shared information
-\emph{herds}: every dispatcher sees the same best server and they stampede onto
-it. We ask whether learned routers inherit this failure, and what prevents it.
-We simulate 12{,}630 runs and validate on a multi-process prototype. Routing
-to the backend with the best learned prediction herds \emph{worse} than
-classic shortest-queue routing. With 16 gateways and 50\,ms-stale state, its
-P99 latency is 1.1\,s against 0.8\,s, and at 200\,ms it is 12.5\,s against
-3.1\,s. Randomising gateway refresh phases rescues the classic policies but
-not the learned one at scale: it still reaches 7.0\,s with 64 gateways.
-Publishing routing weights on a control interval, a common design for learned
-routers, is itself a hidden source of staleness. Combining learned latency
-scores with power-of-$d$ candidate sampling bounds herding by construction.
-Without any probing, its steady-state P99 stays between 108 and 282\,ms in
-all 28 combinations of staleness, gateway count and refresh phase we tested. With $d{=}3$ live probes,
-it matches an oracle that knows every server's true speed (84 vs.\ 83\,ms).
-Under an unannounced gray failure it beats that oracle (112 vs.\ 206\,ms) and a
-Prequal-style prober at the same probe budget (112 vs.\ 144\,ms).
+Production request routers are horizontally scaled: many router replicas
+decide independently from the same, slightly stale view of backend state, and
+they increasingly score backends with learned models. Classic queueing results
+show that shortest-queue routing on stale shared information \emph{herds}:
+every router picks the same server. We ask whether learned routers inherit this
+failure. They do, and it is worse. With 16 routers and 50\,ms-stale state,
+argmin routing on learned latency predictions has a P99 of 1.1\,s against
+0.8\,s for join-the-shortest-queue, and 12.5\,s against 3.1\,s at 200\,ms.
+We show why: any policy that is a deterministic function of the shared snapshot
+sends a whole refresh window to one server, whereas restricting each request to
+candidates drawn independently of the snapshot caps a server's burst at
+$\kappa\lambda\Delta$; measured burst shares agree with both statements.
+Richer latency models and optimistic exploration do not fix argmin herding.
+Two remedies do: learned power-of-$d$ routing, and an age-aware stochastic split
+that accounts for the arrivals a snapshot cannot yet reflect. Without any
+probing, learned power-of-$d$ keeps steady-state P99 between 108 and 282\,ms across
+28 combinations of staleness, router count and refresh phase. In LLM serving
+with prefix caches, a locality-preserving variant stays within 2$\times$ of
+the best tuned prefix-affinity threshold in all of 108 workload regimes with no
+tuning, while every fixed threshold is at least 2.5$\times$ worse in some regime.
+With three live probes it matches an oracle that knows every server's speed
+(84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a
+gray failure (112 vs.\ 144\,ms). The study covers 46{,}930 simulated runs and a
+multi-process prototype.
 \end{abstract}
 
 % ---------------------------------------------------------------------------
@@ -119,7 +123,7 @@ on a multi-process prototype. Our contributions are:
   (\cref{sec:design}). For LLM serving we add \emph{ring-$d$}, which draws the
   candidates from a prefix's rendezvous-hash replicas to keep cache locality.
 \item \textbf{Evaluation.} Across the three settings the remedies are the most
-  robust routers we tested. In LLM serving, learned ring-$d$ stays within 2$\times$
+  robust routers we tested. In LLM serving, learned ring-2 stays within 2$\times$
   of the best tuned prefix-affinity threshold in all 108 workload regimes with no
   tuning, while every fixed threshold is at least 2.5$\times$ worse (up to
   133$\times$) in some regime (\cref{sec:eval-llm}). Our probing variant beats a Prequal-style
@@ -275,7 +279,7 @@ scenario, the fastest backend serves at 20\% speed from $t{=}12$\,s. That
 scenario runs at $\rho=0.75$ so the system stays stable (89\% utilisation
 after the failure). We measure herding with the Fano factor (variance/mean)
 of per-backend arrival counts in 50\,ms bins: independent routing gives about
-1, and a stampede gives far more. In total the study has 12{,}630 simulated
+1, and a stampede gives far more. In total the study has 46{,}930 simulated
 runs.
 
 \paragraph{Policies.} \emph{Heuristics:} JSQ, SED (shortest expected delay with
@@ -349,8 +353,20 @@ JSQ improves from 836 to 282\,ms. Learned greedy, however, still reaches
 \end{figure}
 \Cref{fig:burst} tests \cref{prop:stampede,prop:cap} directly: for each 200\,ms
 window we take the busiest server's share of that window's arrivals.
-\TODO{fill burst-share numbers from summary.md after the final grid: wrandom,
-JSQ, SED, P2C, P2C-L, P3C-L, greedy, TS, age-aware.}
+Capacity-weighted random routing gives 0.22 (its cap is the largest capacity share,
+0.20) and P2C 0.26 against its cap of $2/8=0.25$. Learned P2C gives 0.25 and
+learned P3C 0.32 (cap 0.375): sampling pins the burst to $d/N$, with the small
+excess being sampling noise in windows of about 180 requests. The deterministic routers
+stampede: JSQ gives 0.79 and SED 0.96, and their 95th-percentile share is 1.00. Learned argmin routers fall in between: greedy 0.43 and
+Thompson sampling 0.46, because their models differ across routers and
+decorrelate the choices, as remark (iv) anticipated, but not enough to prevent
+the P99 collapse of \cref{fig:staleness}. The age-aware split gives 0.29 with
+learned rates and 0.33 with nominal rates. For LLM serving (moderate skew, 200\,ms windows) the cap is the
+popularity mass $\kappa_{\max}$ of the prefixes whose candidate set includes a
+replica: static hashing has $\kappa_{\max}=0.34$ (measured 0.37), ring-2 0.39 (0.28),
+ring-3 0.57 (0.29), uniform P2C 0.25 (0.28) and P3C 0.375 (0.30), JSQ 1.0 (0.66).
+Measured shares stay at or below the cap, except by a few points where windows
+hold only about 19 requests and sampling noise raises the busiest share.
 
 \subsection{Richer models and optimism do not fix argmin herding}
 \label{sec:eval-models}
@@ -442,9 +458,27 @@ degrades with $K$ because each gateway learns from $1/K$ of the traffic.
 
 \subsection{Age-aware stochastic split}
 \label{sec:eval-awf}
-\TODO{fill from summary.md: age-aware split (nominal and learned rates) against
-SED, P2C-L, P3C-L under steady and gray failure, synchronised and
-unsynchronised, fig13.}
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{fig13_age_aware.png}
+  \caption{Age-aware stochastic split against SED, JSQ and learned power-of-$d$ on the shared snapshot (16 routers).}
+  \label{fig:awf}
+\end{figure*}
+\Cref{fig:awf} compares the age-aware split with power-of-$d$ on the same stale
+snapshot. With learned service rates it is the best router in every
+gray-failure cell: 90/120/163/375\,ms at 0/10/50/200\,ms staleness with
+synchronised refresh, against 110/131/196/533\,ms for P3C-L and
+167/178/221/411\,ms for P2C-L; with unsynchronised refresh 90/114/147/213\,ms
+against 110/127/169/283\,ms for P3C-L. Known nominal rates do not help
+there (727\,ms at 200\,ms), because after the failure they are wrong. In steady state
+with unsynchronised refresh the split with nominal rates is best (112\,ms at
+50\,ms and 147\,ms at 200\,ms, against 142 and 193\,ms for P2C-L), and with live
+state it beats P2C-L (72 and 76\,ms against 112\,ms). It loses only in
+steady state with synchronised refresh at 200\,ms (296\,ms against 238\,ms for P2C-L), where
+the burst cap of \cref{prop:cap} is worth more than its extra information.
+So the two remedies are complementary: power-of-$d$ needs no model of arrivals,
+the age-aware split uses the snapshot's age and learned rates to track a
+changing fleet.
 
 \subsection{LLM serving with prefix caches}
 \label{sec:eval-llm}

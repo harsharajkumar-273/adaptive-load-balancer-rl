@@ -450,17 +450,17 @@ def llm_section(out, llm: Optional[pd.DataFrame], regimes: Optional[pd.DataFrame
             rows.append(f"| {pol} | {r.median():.2f}× | {r.quantile(0.9):.2f}× | {r.max():.1f}× | "
                         f"{(r <= 1.5).mean() * 100:.0f}% |")
         _section(out, f"LLM serving: P99 relative to the best tuned threshold, {len(held)} regimes "
-                      f"(threshold chosen on seeds 0-4, policies evaluated on seeds 5-9)", "\\n".join(rows))
+                      f"(threshold chosen on seeds 0-4, policies evaluated on seeds 5-9)", "\n".join(rows))
         rows = ["| policy | median | 90th pct | worst |", "|:---|:---:|:---:|:---:|"]
         for pol in pols:
             if pol in insample:
                 r = insample[pol]
                 rows.append(f"| {pol} | {r.median():.2f}× | {r.quantile(0.9):.2f}× | {r.max():.1f}× |")
         _section(out, "Same, with the threshold chosen in hindsight on the evaluation seeds (favours thresholds)",
-                 "\\n".join(rows))
+                 "\n".join(rows))
         counts = best_t.str.replace("affinity_thr", "T=").value_counts()
         _section(out, "Which fixed threshold was best (held-out selection): no single value is safe",
-                 "\\n".join(f"- {k}: {v} regimes" for k, v in counts.items()))
+                 "\n".join(f"- {k}: {v} regimes" for k, v in counts.items()))
 
 
 MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma"], "learned greedy"),
@@ -549,7 +549,7 @@ def theory_section(out, main: pd.DataFrame, llm: Optional[pd.DataFrame]) -> None
     ax.invert_yaxis()
     ax.axvline(1.0 / len(DEFAULT_MUS), color=MUTED, linewidth=0.8, linestyle=":")
     ax.set_xlim(0, 1.05)
-    _axes_style(ax, "busiest server's share of a 200 ms window's arrivals (bar: measured; black tick: Proposition 2 cap)",
+    _axes_style(ax, "busiest server's share of a 200 ms window (bar: measured; tick: cap, Prop. 1 gives 1.0, Prop. 2 gives d/N)",
                 "", logy=False)
     ax.set_title("Burst concentration: measured vs. predicted caps (16 routers, 200 ms stale state)",
                  color=TEXT, fontsize=11, loc="left")
@@ -557,7 +557,7 @@ def theory_section(out, main: pd.DataFrame, llm: Optional[pd.DataFrame]) -> None
     fig.savefig(os.path.join(FIGURES, "fig15_burst_share.png"), dpi=150, facecolor="white", bbox_inches="tight")
     plt.close(fig)
     _section(out, "Burst concentration (queue model): busiest server's share of a 200 ms window, 16 routers, "
-                  "synchronised stale state", "\\n".join(rows))
+                  "synchronised stale state", "\n".join(rows))
     if llm is not None and "window_share_mean" in llm:
         rows = ["| policy | κ_max (cap) | measured mean share |", "|:---|:---:|:---:|"]
         sub = llm[(llm.zipf == 1.1) & (llm.rate == 75.0) & (llm.scenario == "llm") & (llm.num_dispatchers == 16)
@@ -571,7 +571,7 @@ def theory_section(out, main: pd.DataFrame, llm: Optional[pd.DataFrame]) -> None
                 continue
             rows.append(f"| {pol} | {'–' if kappa is None else f'{kappa:.2f}'} | {v.window_share_mean.median():.2f} |")
         _section(out, "Burst concentration (LLM scenario, moderate skew): κ_max = largest popularity mass of "
-                      "prefixes whose candidate set includes one replica, 16 routers, 200 ms windows", "\\n".join(rows))
+                      "prefixes whose candidate set includes one replica, 16 routers, 200 ms windows", "\n".join(rows))
 
 
 def awf_figure(df: pd.DataFrame) -> None:

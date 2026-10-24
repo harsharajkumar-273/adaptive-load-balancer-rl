@@ -1,103 +1,110 @@
 # Do Learned Load Balancers Herd?
 
-**Question.** Production routing tiers run many gateway replicas that decide
-independently from the same, slightly stale shared view of backend load, and
-they increasingly score backends with learned latency models. Classic queueing
-work shows that shortest-queue routing on stale shared state *herds*: every
-dispatcher sees the same "best" server and they all send to it. **Do learned
-routers herd too, and what cheap change prevents it?**
+**Question.** Production routing tiers run many router replicas that decide
+independently from the same, slightly stale view of backend state, and they
+increasingly score backends with learned models. Classic queueing work shows
+that shortest-queue routing on stale shared state *herds*: every router picks
+the same "best" server. **Do learned routers herd too, why, and what prevents it?**
 
-The paper draft is in [`../paper/main.tex`](../paper/main.tex). All numbers
-below come from [`results/summary.md`](results/summary.md), which reports the
-median over 10 seeds with the interquartile range, across 12,630 simulated runs.
-These are simulation results under the stated assumptions. The real-system
-validation (`realsys.py`) repeats the same grid on real processes: gateways,
-backends, Redis and the production LinTS agent. It covers every policy family,
-1–64 gateways, synchronised and unsynchronised refresh, and steady and gray
-scenarios, at a 10× slower time scale. That run is in progress; its results
-will appear in `results/realsys.csv` and in the summary's rank-agreement
-section.
+The paper draft is [`../paper/main.tex`](../paper/main.tex). Every number below
+comes from [`results/summary.md`](results/summary.md) (median and interquartile
+range over 10 seeds; 46,930 simulated runs). These are simulation results under
+the stated assumptions. The real-system validation (`realsys.py`, instructions in
+[`RUNNING_REALSYS.md`](RUNNING_REALSYS.md)) is a separate, long-running experiment
+whose results are not yet part of the paper.
 
 ## Findings
 
-Unless stated otherwise: 16 gateways, ρ = 0.9, P99 latency.
+Unless stated otherwise: 16 routers, queueing model, ρ = 0.9, P99 latency.
 
 1. **Learned argmin routing herds worse than JSQ.** With synchronised 50 ms
-   state, learned greedy reaches 1,055 ms against 836 ms for JSQ. At 200 ms it
-   reaches 12.5 s against 3.1 s.
-2. **Desynchronising refresh rescues the classics, not the learner at scale.**
-   With independent refresh phases, JSQ improves from 836 to 282 ms at 50 ms,
-   but learned greedy still reaches 6.1 s at 200 ms, and 7.0 s with 64
-   gateways.
-3. **Two herding mechanisms.**
-   - *Within a gateway* (temporal): local correction fixes it. At K=1, greedy
-     goes from 630 to 100 ms.
-   - *Across gateways* (agreement): local correction fails, with greedy+lc at
-     8.1 s at K=64. Per-request Thompson sampling helps because independently
-     trained posteriors disagree: 763 ms at K=1, 201 ms at K=16.
-4. **Control intervals are hidden staleness.** Recomputing weights every
-   150 ms (as `src/agent.py` does) gives 204 ms even with live state, against
-   72 ms per request. The cost grows with the interval: 137 ms at 10 ms and
-   800 ms at 500 ms.
-5. **Learned power-of-d bounds herding.** Sample d backends uniformly, then
-   send to the one with the lowest learned prediction. No backend receives more
-   than d/N of the requests, whatever the staleness or gateway count. Without
-   probes, P2C over learned scores stays between 108 and 282 ms in all 28
-   steady-state configurations.
-6. **Probing: learned power-of-d vs. Prequal at equal cost.**
-   - At 3 probes per request, learned P3C gets 84 ms against 127 ms steady, and
-     112 against 144 ms under gray failure.
-   - With zero probes, P2C over learned scores (151 ms) beats Prequal limited to
-     1 probe per request (180 ms).
-7. **What learning buys.** In steady state, learned P3C matches SED(3), which
-   is told the true server speeds (84 vs. 83 ms). Under a gray failure the
-   oracle's speed knowledge is stale (206 ms) and the learned model is not
-   (112 ms). With heavy-tailed service (CV 4) the oracle leads (419 vs.
-   483 ms): noisy service slows learning.
+   state, learned greedy reaches 1,055 ms against 836 ms for JSQ; at 200 ms it
+   reaches 12.5 s against 3.1 s. Desynchronising refresh phases rescues JSQ
+   (282 ms at 50 ms) but not learned greedy (6.1 s at 200 ms, 7.0 s with 64 routers).
+2. **A burst bound explains it** (paper §3). A deterministic function of the
+   shared snapshot sends a whole refresh window to one server (Prop. 1); a
+   candidate set drawn independently of the snapshot caps a server's burst at
+   κ·λ·Δ (Prop. 2; κ = d/N for uniform sampling). Measured share of a 200 ms
+   window going to the busiest server: JSQ 0.79, SED 0.96 (stampede); weighted
+   random 0.22 (cap 0.20), P2C 0.26 (cap 0.25), learned P2C 0.25, learned P3C
+   0.32 (cap 0.375); learned greedy 0.43 and Thompson 0.46 sit in between
+   because per-router models disagree.
+3. **The learner is not the problem.** A quadratic queue term, the router's own
+   latency history, and an optimistic (LinUCB-style) learner do not fix argmin
+   herding and can make it much worse (greedy 1.1 s → 59 s with the quadratic
+   term). Power-of-d is insensitive to the model: 141–153 ms at 50 ms staleness
+   for every feature set.
+4. **Control intervals are hidden staleness.** Recomputing weights every 150 ms
+   (as `src/agent.py` does) gives 204 ms even with live state, against 72 ms per
+   request, and 800 ms at a 500 ms interval.
+5. **Remedy 1: learned power-of-d.** Sample d candidates, rank them with the
+   learned model. Without probes, steady-state P99 stays within 108–282 ms across
+   all 28 combinations of staleness, router count and refresh phase. With 3
+   live probes it matches an oracle that knows server speeds (84 vs. 83 ms) and
+   beats a Prequal-style prober under a gray failure (112 vs. 144 ms).
+6. **Remedy 2: age-aware stochastic split** (our construction, inspired by
+   stochastic coordination but not that algorithm). Equalises expected delay given
+   the snapshot's age and the other routers' expected arrivals. With learned
+   service rates it is the best router in every gray-failure cell (e.g. 213 vs.
+   283 ms for P3C at 200 ms, unsynchronised) and in steady state with
+   unsynchronised refresh with nominal rates (147 vs. 193 ms). It loses in steady
+   state with synchronised refresh at 200 ms (296 vs. 238 ms for P2C).
+7. **LLM serving with prefix caches** (`llm_sim.py`; paper §5). Plain prefix
+   affinity herds onto the replica holding a hot prefix (26.9 s P99 vs. 252 ms
+   with a load threshold T=4); learned greedy is best with fresh state but herds
+   when stale (2.4 s at 200 ms). *Ring-d* (candidates = the d rendezvous-hash
+   replicas of the prefix, ranked by a learned model with a cache-hit feature) keeps
+   locality and balance with no threshold: over 108 workload regimes, with T
+   chosen on held-out seeds, ring-2 has median regret 1.06×, worst 1.98×, whereas
+   five different T values win in different regimes and the best single value
+   (T=4) is up to 11.2× worse (others up to 133×). Under a replica gray failure
+   ring-3 beats the best threshold at every staleness level.
 
-## Simulator (`sim.py`)
+## Simulators
 
-| Component | Model |
-|---|---|
-| Servers | 8 FIFO single-server queues, rates 200/200/150/150/100/100/50/50 req/s; exponential or lognormal service (`service_cv`) |
-| Arrivals | Poisson at ρ × 1000, or a two-state Markov-modulated process (`burstiness`); each request goes to one of K gateways uniformly |
-| Shared state | queue-length snapshot every Δ s, with synchronised or per-gateway (`desync`) refresh phases |
-| Feedback | each gateway sees the latency of its own requests, at completion |
-| Probing | live requests-in-flight plus per-RIF latency estimate; synchronous probes are charged 0.5 ms |
-| Gray failure | fastest server drops to 20% speed at t = 12 s (run at ρ = 0.75 so the system stays stable) |
+| | `sim.py` (queueing model) | `llm_sim.py` (LLM serving) |
+|---|---|---|
+| Servers | 8 FIFO single-server queues, rates 200…50 req/s; exponential or lognormal service | 8 prefill replicas, FIFO, LRU prefix cache (24 prefixes), prefill 8k tokens/s |
+| Arrivals | Poisson (or Markov-modulated) at ρ × 1000 req/s, spread uniformly over K routers | Poisson, 64 prefix classes with Zipf popularity, unique suffix per request |
+| Shared state | queue-length snapshot every Δ, synchronised or per-router phase | queue length **and cached-prefix set** every Δ |
+| Feedback | each router sees the latency of its own requests at completion | same (TTFT) |
+| Faults | fastest server drops to 20% speed at t = 12 s (ρ = 0.75) | one replica drops to 25% speed at t = 20 s |
+| Herding metrics | Fano factor of arrivals; busiest server's share of a refresh window | same |
 
-It is validated against M/M/1 theory and the classic stale-JSQ result
-(`tests/test_research_sim.py`).
+Both are exact event simulations (FIFO makes each departure time known at
+arrival), validated against M/M/1 theory and the classic stale-JSQ result
+(`tests/test_research_sim.py`, `tests/test_llm_sim.py`).
 
-## Policies (`policies.py`)
+## Policies
 
-- **Heuristics on the snapshot:** weighted random, JSQ, SED, P2C.
-- **Learned** (per-gateway discounted Bayesian linear model, latency ≈ a + b·queue):
-  - greedy
-  - per-request Thompson sampling
-  - `ts_epoch`: 150 ms weights, mirroring `src/agent.py`
-  - `p2c_learned` / `p3c_learned`
-- **Probing:**
-  - `prequal`: re-implementation, tuned in its favour
-  - `p2c_probe`, `p3c_probe`, `sed3_probe`: classic power-of-d over live probes
-  - `p2c_learned_probe`, `p3c_learned_probe`
-- **`+lc` suffix:** local correction.
-
-## Limitations
-
-- Single-server FIFO backends, a two-feature model, and one fleet shape.
-- The Prequal baseline is a re-implementation from the paper's description.
-- Our probing variants probe synchronously; with sub-millisecond services that
-  round-trip matters more than it does here.
-- The related-work comparison is not complete yet (see the TODOs in the paper).
+- **Heuristics (snapshot):** weighted random, JSQ, SED, P2C; LLM: JSQ, P2C,
+  static hashing, prefix affinity, affinity + load threshold T ∈ {1, 2, 4, 8, 16, 32}.
+- **Learned (snapshot, `policies.py`, `llm_sim.py`):** greedy, Thompson, TS-epoch
+  (mirrors `src/agent.py`), LinUCB, P2C/P3C, ring-2/ring-3; model variants
+  `q`, `q²`, `q + own latency`; `+lc` = local correction.
+- **Age-aware split:** `awf` (nominal rates), `awf_learned`.
+- **Probing:** Prequal-style prober (re-implementation, tuned in its favour),
+  JSQ(d), SED(d), learned power-of-d with live probes.
 
 ## Reproduce
 
 ```bash
 pip install -r requirements.txt -r research/requirements.txt
-python -m research.run all        # ~35 min on 4 cores
+python -m research.run all        # every simulator experiment, about 1.5 h on 4 cores
 python -m research.analyze        # figures/ + results/summary.md
-redis-server --daemonize yes
-python -m research.realsys        # real-system grid: 2,160 runs, ~40-45 h on 4 cores, resumable
 PYTHONPATH=. pytest -q
 ```
+
+`research.run` also takes a single experiment name: `main`, `robust`, `frontier`,
+`probing`, `epoch`, `load`, `tuning`, `models`, `llm` or `llm_regimes`
+(`--quick` runs a small smoke-test grid).
+
+## Limitations
+
+- Single-server FIFO backends. The LLM model has no batching, no decode phase,
+  and one load signal; its constants are plausible, not measured on a trace.
+- Linear latency models (the variants tested do not change the conclusions).
+- The Prequal baseline is a re-implementation from the paper's description.
+- The age-aware split needs the number of routers and an estimate of the total
+  arrival rate.
+- Real-system validation is in progress and not yet part of the paper's results.
