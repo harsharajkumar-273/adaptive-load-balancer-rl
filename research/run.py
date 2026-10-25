@@ -29,6 +29,7 @@ from typing import Dict, Iterable, List, Tuple
 import math
 
 from research.llm_sim import LLMScenario, THRESHOLDS, simulate_llm
+from research.trace_sim import TraceScenario, simulate_trace
 from research.policies import ALL_POLICIES
 from research.sim import Scenario, simulate
 
@@ -157,9 +158,27 @@ def _grid_llm_regimes(quick: bool) -> Iterable[Job]:
         yield ("llm_regimes", sc, pol, seed, {})
 
 
+TRACE_POLICIES = (["jsq", "p2c", "hash", "affinity"] + [f"affinity_thr{t}" for t in THRESHOLDS]
+                  + ["greedy_learned", "ts_learned", "p2c_learned", "ring2_learned", "ring3_learned",
+                     "affinity_p2c_learned", "greedy_learned+lc", "ring2_learned+lc"])
+
+
+def _grid_trace(quick: bool) -> Iterable[Job]:
+    """Replay of real Mooncake traces: load (trace time compression) x staleness x gray failure."""
+    seeds = range(2 if quick else 10)
+    speedups = [6.0, 10.0] if quick else [4.0, 6.0, 8.0, 10.0, 12.0]
+    traces = ["toolagent"] if quick else ["toolagent", "conversation"]
+    for trace, sp, st, gray, pol, seed in itertools.product(traces, speedups, [0.05, 0.2], [False, True],
+                                                            TRACE_POLICIES, seeds):
+        sc = TraceScenario(trace=trace, speedup=sp, staleness=st, prefill_tokens_per_sec=50000.0,
+                           max_requests=4000 if quick else 12000, slow_replica=0 if gray else None)
+        yield ("trace", sc, pol, seed, {})
+
+
 MODEL_POLICIES = ["greedy", "greedy_q2", "greedy_ewma", "linucb", "linucb_ewma", "ts",
                   "p2c_learned", "p2c_learned_q2", "p2c_learned_ewma",
-                  "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma"]
+                  "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma",
+                  "greedy_rbf", "linucb_rbf", "p2c_learned_rbf", "p3c_learned_rbf"]
 
 
 def _grid_models(quick: bool) -> Iterable[Job]:
@@ -169,13 +188,14 @@ def _grid_models(quick: bool) -> Iterable[Job]:
         yield ("models", _scenario(scen, staleness=st, num_dispatchers=16, desync=desync), pol, seed, {})
 
 
-GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
+GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "trace": _grid_trace, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
          "epoch": _grid_epoch, "load": _grid_load, "tuning": _grid_tuning}
 
 
 def _run(job: Job) -> Dict:
     exp, sc, pol, seed, kw = job
-    row = (simulate_llm if isinstance(sc, LLMScenario) else simulate)(sc, pol, seed=seed, policy_kwargs=kw)
+    fn = simulate_llm if isinstance(sc, LLMScenario) else simulate_trace if isinstance(sc, TraceScenario) else simulate
+    row = fn(sc, pol, seed=seed, policy_kwargs=kw)
     row["experiment"] = exp
     row["policy_kwargs"] = ";".join(f"{k}={v}" for k, v in sorted(kw.items()))
     return row

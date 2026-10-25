@@ -82,6 +82,16 @@ def prefix_lengths(sc: LLMScenario, rng: np.random.Generator) -> np.ndarray:
     return np.exp(u)
 
 
+def _lead_fraction(blocks: Sequence[int], present) -> float:
+    """Fraction of `blocks` forming a cached leading run; 0 if only the universal first block matches."""
+    m = 0
+    for b in blocks:
+        if not present(b):
+            break
+        m += 1
+    return m / len(blocks) if m >= 2 else 0.0
+
+
 def rendezvous_order(prefix: int, n: int) -> List[int]:
     """Replicas ranked for a prefix by a fixed pseudo-random hash (identical at every router)."""
     return sorted(range(n), key=lambda s: random.Random(prefix * 1_000_003 + s).random())
@@ -110,20 +120,29 @@ class Router:
             self._rank[prefix] = rendezvous_order(prefix, self.n)
         return self._rank[prefix]
 
-    def choose(self, t: float, prefix: int, q: List[int], caches: Sequence, version: int):
-        hit = [prefix in c for c in caches]
+    def choose(self, t: float, prefix: int, q: List[int], caches: Sequence, version: int, blocks=None):
+        """With `blocks` (trace mode) a request is a chain of KV blocks and `hit` is the cached
+        fraction of the leading run (0 unless more than the universal first block matches);
+        otherwise `prefix` is a single prefix id and `hit` is membership."""
+        if blocks is None:
+            hit = [prefix in c for c in caches]
+        else:
+            hit = [_lead_fraction(blocks, c.__contains__) for c in caches]
         if self.local_correction:
             if version != self._version:
                 self._version = version
                 self._sent = [0] * self.n
                 self._sent_prefixes = [set() for _ in range(self.n)]
             q = [qi + si for qi, si in zip(q, self._sent)]
-            hit = [h or (prefix in sp) for h, sp in zip(hit, self._sent_prefixes)]
+            if blocks is None:
+                hit = [h or (prefix in sp) for h, sp in zip(hit, self._sent_prefixes)]
+            else:
+                hit = [max(h, _lead_fraction(blocks, sp.__contains__)) for h, sp in zip(hit, self._sent_prefixes)]
         s = self.pick(t, prefix, q, hit)
         if self.local_correction:
             self._sent[s] += 1
-            self._sent_prefixes[s].add(prefix)
-        return s, [1.0, float(q[s]), 1.0 if hit[s] else 0.0]
+            self._sent_prefixes[s].update(blocks) if blocks is not None else self._sent_prefixes[s].add(prefix)
+        return s, [1.0, float(q[s]), float(hit[s])]
 
     def pick(self, t, prefix, q, hit) -> int:
         raise NotImplementedError
@@ -193,7 +212,7 @@ class LearnedBase(Router):
         self.explore, self.d = explore, d
 
     def features(self, q, hit) -> np.ndarray:
-        return np.array([[1.0, float(q[i]), 1.0 if hit[i] else 0.0] for i in range(self.n)])
+        return np.array([[1.0, float(q[i]), float(hit[i])] for i in range(self.n)])
 
     def scores(self, q, hit) -> np.ndarray:
         X = self.features(q, hit)

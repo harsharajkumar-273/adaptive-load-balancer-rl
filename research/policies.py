@@ -46,6 +46,7 @@ published, which the shared snapshot cannot yet reflect.
 """
 from __future__ import annotations
 
+import math
 import random
 from typing import List, Sequence, Tuple
 
@@ -71,12 +72,17 @@ VARIANTS = {
     "p3c_learned_q2": ("p2c_learned", {"d": 3, "features": "q2"}),
     "p3c_learned_ewma": ("p2c_learned", {"d": 3, "features": "ewma"}),
     "linucb_ewma": ("linucb", {"features": "ewma"}),
+    "greedy_rbf": ("greedy", {"features": "rbf"}),
+    "linucb_rbf": ("linucb", {"features": "rbf"}),
+    "p2c_learned_rbf": ("p2c_learned", {"features": "rbf"}),
+    "p3c_learned_rbf": ("p2c_learned", {"d": 3, "features": "rbf"}),
     "awf": ("awf_class", {"rates": "nominal"}),
     "awf_learned": ("awf_class", {"rates": "learned"}),
 }
 # Model-variant ablation (own experiment, not part of the main grid).
 ABLATION_POLICIES = ["greedy_q2", "greedy_ewma", "p2c_learned_q2", "p2c_learned_ewma", "p3c_learned_q2",
-                     "p3c_learned_ewma", "linucb", "linucb_ewma"]
+                     "p3c_learned_ewma", "linucb", "linucb_ewma", "greedy_rbf", "linucb_rbf", "p2c_learned_rbf",
+                     "p3c_learned_rbf"]
 ALL_POLICIES = (HEURISTICS + LEARNED + PROBING + [v for v in VARIANTS if v not in ABLATION_POLICIES]
                 + [p + "+lc" for p in ["jsq", "greedy", "ts", "p2c_learned"]])
 
@@ -177,7 +183,8 @@ class P2C(Dispatcher):
         return a if q[a] < q[b] else b
 
 
-FEATURE_DIMS = {"q": 2, "q2": 3, "ewma": 3}
+RBF_CENTERS = (1.0, 3.0, 6.0, 10.0)
+FEATURE_DIMS = {"q": 2, "q2": 3, "ewma": 3, "rbf": 2 + len(RBF_CENTERS)}
 
 
 class Learned(Dispatcher):
@@ -203,6 +210,8 @@ class Learned(Dispatcher):
         """Feature vector of server s for queue lengths q (richer feature sets only)."""
         if self.features == "q2":
             return [1.0, float(q[s]), float(q[s]) ** 2 / 10.0]
+        if self.features == "rbf":   # flexible non-linear function of the queue length
+            return [1.0, float(q[s])] + [math.exp(-((float(q[s]) - c) / 2.0) ** 2 / 2.0) for c in RBF_CENTERS]
         return [1.0, float(q[s]), self._ewma[s]]
 
     def _X(self, q):

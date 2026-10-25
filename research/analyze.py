@@ -465,16 +465,84 @@ def llm_section(out, llm: Optional[pd.DataFrame], regimes: Optional[pd.DataFrame
                  "\n".join(f"- {k}: {v} regimes" for k, v in counts.items()))
 
 
-MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma"], "learned greedy"),
-                  ("linucb", ["linucb", None, "linucb_ewma"], "LinUCB (optimistic)"),
-                  ("p2c", ["p2c_learned", "p2c_learned_q2", "p2c_learned_ewma"], "learned P2C"),
-                  ("p3c", ["p3c_learned", "p3c_learned_q2", "p3c_learned_ewma"], "learned P3C")]
+TRACE_HEAD = ["jsq", "affinity", "affinity_thr4", "greedy_learned", "ring2_learned", "ring3_learned"]
+TRACE_KEYS = ["trace", "speedup", "staleness", "scenario"]
+
+
+def trace_regret(df: pd.DataFrame, metric: str = "p99_slowdown"):
+    """Same held-out threshold selection as regret_tables, over the trace cells."""
+    sel = df[df.seed < 5].groupby(TRACE_KEYS + ["policy"])[metric].median().unstack()
+    ev = df[df.seed >= 5].groupby(TRACE_KEYS + ["policy"])[metric].median().unstack()
+    best_t = sel[LLM_THRESHOLDS].idxmin(axis=1)
+    ref = pd.Series([ev.loc[k, best_t.loc[k]] for k in ev.index], index=ev.index)
+    return ev.div(ref, axis=0), best_t
+
+
+def trace_figure(df: pd.DataFrame, metric: str = "p99_slowdown") -> None:
+    traces = [t for t in ("toolagent", "conversation") if t in set(df.trace)]
+    speeds = sorted(df.speedup.unique())
+    fig, axes = plt.subplots(len(traces), 2, figsize=(10.5, 3.9 * len(traces)), sharey="row", squeeze=False)
+    for r, trace in enumerate(traces):
+        for c, (scen, name) in enumerate((("trace", "healthy replicas"), ("trace_gray", "one replica slows to 25%"))):
+            ax = axes[r, c]
+            frame = df[(df.trace == trace) & (df.scenario == scen) & (df.staleness == 0.2)]
+            for pol in TRACE_HEAD:
+                _llm_line(ax, frame, pol, "speedup", speeds, metric)
+            ax.set_title(f"{trace} trace; {name}", color=TEXT, fontsize=10, loc="left")
+            _axes_style(ax, "load (trace time compression ×)" if r == len(traces) - 1 else "",
+                        "P99 slowdown (TTFT / unloaded prefill, log)" if c == 0 else "")
+            ax.set_xticks(range(len(speeds)))
+            ax.set_xticklabels([f"{v:g}" for v in speeds])
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=3)
+    fig.suptitle("Replay of real Mooncake traces (16 routers, 200 ms staleness, 8 replicas)", color=TEXT, fontsize=12,
+                 x=0.01, ha="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIGURES, "fig16_trace.png"), dpi=150, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+
+def trace_section(out, df: Optional[pd.DataFrame]) -> None:
+    if df is None:
+        return
+    trace_figure(df)
+    order = [p for p in LLM_STYLE if p in set(df.policy)] + [p for p in df.policy.unique() if p not in LLM_STYLE]
+    for trace in sorted(df.trace.unique()):
+        for scen, sname in (("trace", "healthy"), ("trace_gray", "gray failure")):
+            for st in sorted(df.staleness.unique()):
+                sub = df[(df.trace == trace) & (df.scenario == scen) & (df.staleness == st)]
+                for metric, mname in (("p99_slowdown", "P99 slowdown"), ("p99_wait_ms", "P99 queueing wait (ms)")):
+                    _section(out, f"Trace {trace}, {sname}, {st * 1000:g} ms staleness: {mname} vs. load (×)",
+                             table(sub, "policy", "speedup", metric, order, sorted(sub.speedup.unique())))
+        sub = df[(df.trace == trace) & (df.scenario == "trace") & (df.staleness == 0.2)]
+        _section(out, f"Trace {trace}, healthy, 200 ms: cache hit rate (median)",
+                 table(sub.assign(hit_pct=sub.hit_rate * 100), "policy", "speedup", "hit_pct", order,
+                       sorted(sub.speedup.unique())))
+    held, best_t = trace_regret(df)
+    pols = LLM_THRESHOLDS + ["affinity", "jsq", "hash", "greedy_learned", "ring2_learned", "ring3_learned",
+                             "affinity_p2c_learned", "p2c_learned", "ring2_learned+lc", "greedy_learned+lc"]
+    rows = ["| policy | median | 90th pct | worst | cells within 1.5× |", "|:---|:---:|:---:|:---:|:---:|"]
+    for pol in pols:
+        if pol in held:
+            r = held[pol]
+            rows.append(f"| {pol} | {r.median():.2f}× | {r.quantile(0.9):.2f}× | {r.max():.1f}× | "
+                        f"{(r <= 1.5).mean() * 100:.0f}% |")
+    _section(out, f"Trace replay: P99 slowdown relative to the best tuned threshold, {len(held)} cells "
+                  "(threshold chosen on seeds 0-4, evaluated on seeds 5-9)", "\n".join(rows))
+    counts = best_t.str.replace("affinity_thr", "T=").value_counts()
+    _section(out, "Trace replay: which fixed threshold was best", "\n".join(f"- {k}: {v} cells" for k, v in counts.items()))
+
+
+MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma", "greedy_rbf"], "learned greedy"),
+                  ("linucb", ["linucb", None, "linucb_ewma", "linucb_rbf"], "LinUCB (optimistic)"),
+                  ("p2c", ["p2c_learned", "p2c_learned_q2", "p2c_learned_ewma", "p2c_learned_rbf"], "learned P2C"),
+                  ("p3c", ["p3c_learned", "p3c_learned_q2", "p3c_learned_ewma", "p3c_learned_rbf"], "learned P3C")]
 MODEL_COLORS = {"greedy": "#eb6834", "linucb": "#e87ba4", "p2c": "#008300", "p3c": "#4a3aa7"}
-MODEL_FEATURES = ["q", "q²", "q + own latency"]
+MODEL_FEATURES = ["q", "q²", "q + own latency", "q, non-linear (RBF)"]
 
 
 def models_section(out, df: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(1, 4, figsize=(15.5, 4.2), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(16.5, 4.4), sharey=True)
     cells = [("steady", 0.05), ("steady", 0.2), ("gray", 0.05), ("gray", 0.2)]
     for ax, (scen, st) in zip(axes, cells):
         frame = df[(df.scenario == scen) & (df.staleness == st) & (~df.desync)]
@@ -489,8 +557,8 @@ def models_section(out, df: pd.DataFrame) -> None:
                 xs.append(i); med.append(v.median()); lo.append(v.quantile(0.25)); hi.append(v.quantile(0.75))
             ax.plot(xs, med, color=MODEL_COLORS[fam], marker="o", linewidth=1.8, markersize=5, label=label)
             ax.fill_between(xs, lo, hi, color=MODEL_COLORS[fam], alpha=0.10, linewidth=0)
-        ax.set_xticks(range(3))
-        ax.set_xticklabels(MODEL_FEATURES, fontsize=8)
+        ax.set_xticks(range(4))
+        ax.set_xticklabels(MODEL_FEATURES, fontsize=8, rotation=20, ha="right")
         ax.set_title(f"{scen}, {staleness_label(st)} staleness", color=TEXT, fontsize=10, loc="left")
         _axes_style(ax, "latency-model features", "P99 latency (ms, log)" if ax is axes[0] else "")
     h, l = axes[0].get_legend_handles_labels()
@@ -694,6 +762,9 @@ def main():
     if os.path.exists(llm_path) or os.path.exists(regimes_path):
         llm_section(out, pd.read_csv(llm_path) if os.path.exists(llm_path) else None,
                     pd.read_csv(regimes_path) if os.path.exists(regimes_path) else None)
+    trace_path = os.path.join(RESULTS, "trace.csv")
+    if os.path.exists(trace_path):
+        trace_section(out, pd.read_csv(trace_path))
     models_path = os.path.join(RESULTS, "models.csv")
     if os.path.exists(models_path):
         models_section(out, pd.read_csv(models_path))
