@@ -340,6 +340,10 @@ LLM_STYLE = {  # policy -> (colour, linestyle, marker, label)
     "ring2_learned": ("#008300", "-", "o", "learned ring-2"),
     "ring3_learned": ("#008300", "--", "D", "learned ring-3"),
     "affinity_p2c_learned": ("#e34948", "-", "o", "learned P2C: one holder + random"),
+    "ring2_learned_c": ("#00a0a0", "-", "s", "learned ring-2 + request-cost feature"),
+    "ring3_learned_c": ("#00a0a0", "--", "s", "learned ring-3 + request-cost feature"),
+    "greedy_learned_c": ("#eb6834", ":", "s", "learned greedy + request-cost feature"),
+    "affinity_p2c_learned_c": ("#e34948", ":", "s", "learned P2C holder + request-cost feature"),
 }
 LLM_HEAD = ["jsq", "hash", "affinity", "affinity_thr4", "greedy_learned", "ring2_learned", "ring3_learned",
             "affinity_p2c_learned"]
@@ -465,7 +469,7 @@ def llm_section(out, llm: Optional[pd.DataFrame], regimes: Optional[pd.DataFrame
                  "\n".join(f"- {k}: {v} regimes" for k, v in counts.items()))
 
 
-TRACE_HEAD = ["jsq", "affinity", "affinity_thr4", "greedy_learned", "ring2_learned", "ring3_learned"]
+TRACE_HEAD = ["jsq", "affinity", "affinity_thr4", "greedy_learned", "ring2_learned", "ring2_learned_c"]
 TRACE_KEYS = ["trace", "speedup", "staleness", "scenario"]
 
 
@@ -519,7 +523,7 @@ def trace_section(out, df: Optional[pd.DataFrame]) -> None:
                  table(sub.assign(hit_pct=sub.hit_rate * 100), "policy", "speedup", "hit_pct", order,
                        sorted(sub.speedup.unique())))
     held, best_t = trace_regret(df)
-    pols = LLM_THRESHOLDS + ["affinity", "jsq", "hash", "greedy_learned", "ring2_learned", "ring3_learned",
+    pols = LLM_THRESHOLDS + ["affinity", "jsq", "hash", "greedy_learned", "ring2_learned", "ring3_learned", "ring2_learned_c", "ring3_learned_c", "greedy_learned_c", "affinity_p2c_learned_c",
                              "affinity_p2c_learned", "p2c_learned", "ring2_learned+lc", "greedy_learned+lc"]
     rows = ["| policy | median | 90th pct | worst | cells within 1.5× |", "|:---|:---:|:---:|:---:|:---:|"]
     for pol in pols:
@@ -764,7 +768,11 @@ def main():
                     pd.read_csv(regimes_path) if os.path.exists(regimes_path) else None)
     trace_path = os.path.join(RESULTS, "trace.csv")
     if os.path.exists(trace_path):
-        trace_section(out, pd.read_csv(trace_path))
+        cost_path = os.path.join(RESULTS, "trace_cost.csv")
+        trace_df = pd.read_csv(trace_path)
+        if os.path.exists(cost_path):
+            trace_df = pd.concat([trace_df, pd.read_csv(cost_path)], ignore_index=True)
+        trace_section(out, trace_df)
     models_path = os.path.join(RESULTS, "models.csv")
     if os.path.exists(models_path):
         models_section(out, pd.read_csv(models_path))

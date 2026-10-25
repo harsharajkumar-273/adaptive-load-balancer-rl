@@ -175,6 +175,15 @@ def _grid_trace(quick: bool) -> Iterable[Job]:
         yield ("trace", sc, pol, seed, {})
 
 
+def _grid_trace_cost(quick: bool) -> Iterable[Job]:
+    """Same cells as `trace`, for routers whose learned score also sees the request's uncached share."""
+    pols = ["greedy_learned_c", "ring2_learned_c", "ring3_learned_c", "affinity_p2c_learned_c"]
+    for exp, sc, pol, seed, kw in _grid_trace(quick):
+        if pol == "jsq":
+            for p in pols:
+                yield (exp, sc, p, seed, kw)
+
+
 MODEL_POLICIES = ["greedy", "greedy_q2", "greedy_ewma", "linucb", "linucb_ewma", "ts",
                   "p2c_learned", "p2c_learned_q2", "p2c_learned_ewma",
                   "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma",
@@ -188,7 +197,7 @@ def _grid_models(quick: bool) -> Iterable[Job]:
         yield ("models", _scenario(scen, staleness=st, num_dispatchers=16, desync=desync), pol, seed, {})
 
 
-GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "trace": _grid_trace, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
+GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "trace": _grid_trace, "trace_cost": _grid_trace_cost, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
          "epoch": _grid_epoch, "load": _grid_load, "tuning": _grid_tuning}
 
 

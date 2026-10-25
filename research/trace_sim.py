@@ -53,6 +53,9 @@ class TraceScenario:
     overhead_sec: float = 0.010
     slow_replica: Optional[int] = None
     slow_factor: float = 0.25
+    ring_depth: int = 1             # ring key = blocks[ring_depth] (clamped); deeper = finer-grained keys
+    load_signal: str = "count"      # "count" = queued requests, "work" = queued prefill work (mean-request units)
+    cost_feature: bool = False      # learned routers also see this request's uncached share
     slow_frac: float = 0.4          # gray failure starts at this fraction of the run
 
     def to_row(self) -> Dict:
@@ -116,14 +119,19 @@ class _Replica:
     def queue_at(self, t: float) -> int:
         return bisect_right(self.arrivals, t) - bisect_right(self.departures, t)
 
+    def backlog_at(self, t: float) -> float:
+        """Seconds until the replica would be idle if nothing else arrived (FIFO)."""
+        i = bisect_right(self.arrivals, t)
+        return max(0.0, self.departures[i - 1] - t) if i else 0.0
 
-def ring_key(blocks) -> int:
-    """Rendezvous key: the first block after the universal system prompt."""
-    return blocks[1] if len(blocks) > 1 else blocks[0]
+
+def ring_key(blocks, depth: int = 1) -> int:
+    """Rendezvous key: the block at `depth` (default: first block after the universal system prompt)."""
+    return blocks[min(depth, len(blocks) - 1)]
 
 
 def simulate_trace(sc: TraceScenario, policy: str, seed: int = 0, policy_kwargs: Optional[Dict] = None) -> Dict:
-    policy_kwargs = policy_kwargs or {}
+    policy_kwargs = {**(policy_kwargs or {}), **({"cost_feature": True} if sc.cost_feature else {})}
     reqs = load_trace(sc.trace, sc.max_requests)
     n_req = len(reqs)
     rng = np.random.default_rng(seed)
@@ -144,6 +152,10 @@ def simulate_trace(sc: TraceScenario, policy: str, seed: int = 0, policy_kwargs:
     replicas = [_Replica(sc.cache_blocks) for _ in range(n)]
     per_token = 1.0 / sc.prefill_tokens_per_sec
     slow_start = horizon * sc.slow_frac
+    unit = sc.overhead_sec + mean_tokens / sc.prefill_tokens_per_sec    # one mean request, no cache
+
+    def load(r, tt):
+        return r.queue_at(tt) if sc.load_signal == "count" else r.backlog_at(tt) / unit
 
     snap_time: List[Optional[float]] = [None] * sc.num_dispatchers
     snap = [None] * sc.num_dispatchers
@@ -164,19 +176,19 @@ def simulate_trace(sc: TraceScenario, policy: str, seed: int = 0, policy_kwargs:
             if tk != snap_time[d]:
                 state = shared.get(tk)
                 if state is None:
-                    state = ([r.queue_at(tk) for r in replicas], [_View(r, tk) for r in replicas])
+                    state = ([load(r, tk) for r in replicas], [_View(r, tk) for r in replicas])
                     if not sc.desync:
                         shared = {tk: state}
                 snap[d], snap_time[d] = state, tk
                 version[d] += 1
             routers[d].snapshot_age = t - tk
         else:
-            snap[d] = ([r.queue_at(t) for r in replicas], [_View(r, t) for r in replicas])
+            snap[d] = ([load(r, t) for r in replicas], [_View(r, t) for r in replicas])
             version[d] += 1
             routers[d].snapshot_age = 0.0
 
         _, in_len, blocks = reqs[j]
-        s, x = routers[d].choose(t, ring_key(blocks), snap[d][0], snap[d][1], version[d], blocks=blocks)
+        s, x = routers[d].choose(t, ring_key(blocks, sc.ring_depth), snap[d][0], snap[d][1], version[d], blocks=blocks)
 
         rep = replicas[s]
         m = rep.lead(blocks)

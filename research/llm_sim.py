@@ -37,6 +37,7 @@ from src.learned_routing import LatencyModel
 from research.sim import window_burst_stats
 
 BIN_SEC = 0.05
+MEAN_BLOCKS = 16.0   # typical request length in KV blocks (trace mode); only scales a feature
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ class Router:
         self._sent = [0] * n
         self._sent_prefixes: List[set] = [set() for _ in range(n)]
         self.snapshot_age = 0.0
+        self.cost_feature = False
         self._rank: Dict[int, List[int]] = {}
 
     def ring(self, prefix: int) -> List[int]:
@@ -138,11 +140,15 @@ class Router:
                 hit = [h or (prefix in sp) for h, sp in zip(hit, self._sent_prefixes)]
             else:
                 hit = [max(h, _lead_fraction(blocks, sp.__contains__)) for h, sp in zip(hit, self._sent_prefixes)]
+        self._req_blocks = len(blocks) if blocks is not None else 0
         s = self.pick(t, prefix, q, hit)
         if self.local_correction:
             self._sent[s] += 1
             self._sent_prefixes[s].update(blocks) if blocks is not None else self._sent_prefixes[s].add(prefix)
-        return s, [1.0, float(q[s]), float(hit[s])]
+        x = [1.0, float(q[s]), float(hit[s])]
+        if self.cost_feature and blocks is not None:
+            x.append((1.0 - float(hit[s])) * len(blocks) / MEAN_BLOCKS)   # uncached share of this request
+        return s, x
 
     def pick(self, t, prefix, q, hit) -> int:
         raise NotImplementedError
@@ -205,14 +211,21 @@ class LearnedBase(Router):
     router sees; pooled=False keeps one model per replica.
     """
 
-    def __init__(self, *a, gamma: float = 0.995, explore: float = 1.0, d: int = 2, pooled: bool = True, **kw):
+    def __init__(self, *a, gamma: float = 0.995, explore: float = 1.0, d: int = 2, pooled: bool = True,
+                 cost_feature: bool = False, **kw):
         super().__init__(*a, **kw)
         self.pooled = pooled
-        self.model = LatencyModel(1 if pooled else self.n, gamma=gamma, dim=3)
+        self.cost_feature = cost_feature
+        self.dim = 4 if cost_feature else 3
+        self._req_blocks = 0
+        self.model = LatencyModel(1 if pooled else self.n, gamma=gamma, dim=self.dim)
         self.explore, self.d = explore, d
 
     def features(self, q, hit) -> np.ndarray:
-        return np.array([[1.0, float(q[i]), float(hit[i])] for i in range(self.n)])
+        rows = [[1.0, float(q[i]), float(hit[i])] for i in range(self.n)]
+        if self.cost_feature:
+            rows = [r + [(1.0 - r[2]) * self._req_blocks / MEAN_BLOCKS] for r in rows]
+        return np.array(rows)
 
     def scores(self, q, hit) -> np.ndarray:
         X = self.features(q, hit)
@@ -223,7 +236,7 @@ class LearnedBase(Router):
     def sampled_scores(self, q, hit) -> np.ndarray:
         X = self.features(q, hit)
         if self.pooled:
-            theta = self.model.theta[0] + self.model.chol[0] @ (self.np_rng.standard_normal(3) * self.explore)
+            theta = self.model.theta[0] + self.model.chol[0] @ (self.np_rng.standard_normal(self.dim) * self.explore)
             return X @ theta
         return self.model.predict_sample(X, self.np_rng, self.explore)
 
@@ -293,10 +306,15 @@ ROUTERS = {
     "ring2_learned": (RingLearned, {"d": 2}),
     "ring3_learned": (RingLearned, {"d": 3}),
     "affinity_p2c_learned": (AffinityPd, {"d": 2}),
+    # trace mode only: the learned score also sees this request's uncached share
+    "greedy_learned_c": (GreedyLearned, {"cost_feature": True}),
+    "ring2_learned_c": (RingLearned, {"d": 2, "cost_feature": True}),
+    "ring3_learned_c": (RingLearned, {"d": 3, "cost_feature": True}),
+    "affinity_p2c_learned_c": (AffinityPd, {"d": 2, "cost_feature": True}),
     "affinity_p3c_learned": (AffinityPd, {"d": 3}),
 }
 THRESHOLDS = [1, 2, 4, 8, 16, 32]
-LLM_POLICIES = list(ROUTERS) + [p + "+lc" for p in ["affinity", "greedy_learned", "affinity_p2c_learned", "ring2_learned", "ring3_learned"]]
+LLM_POLICIES = [p for p in ROUTERS if not p.endswith("_c")] + [p + "+lc" for p in ["affinity", "greedy_learned", "affinity_p2c_learned", "ring2_learned", "ring3_learned"]]
 
 
 def make_router(name: str, **kw) -> Router:
