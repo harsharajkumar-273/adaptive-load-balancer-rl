@@ -67,8 +67,12 @@ that accounts for the arrivals a snapshot cannot yet reflect. Without any
 probing, learned power-of-$d$ keeps steady-state P99 between 108 and 282\,ms across
 28 combinations of staleness, router count and refresh phase. In LLM serving
 with prefix caches, a locality-preserving variant stays within 2$\times$ of
-the best tuned prefix-affinity threshold in all of 108 workload regimes with no
-tuning, while every fixed threshold is at least 2.5$\times$ worse in some regime.
+the best tuned prefix-affinity threshold in all of 108 synthetic workload regimes
+with no tuning, while every fixed threshold is at least 2.5$\times$ worse in some
+regime. Replaying real Mooncake production traces confirms that no fixed threshold is safe
+(the best synthetic value is up to 8.5$\times$ off) but also shows the limit of
+our remedy: at saturation, maximal locality wins and our variant is up to 3$\times$
+from the best tuned threshold.
 With three live probes it matches an oracle that knows every server's speed
 (84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a
 gray failure (112 vs.\ 144\,ms). The study covers 46{,}930 simulated runs.\ifrealsys{} A multi-process prototype validates the simulator.\fi
@@ -126,7 +130,10 @@ on a multi-process prototype\fi. Our contributions are:
   robust routers we tested. In LLM serving, learned ring-2 stays within 2$\times$
   of the best tuned prefix-affinity threshold in all 108 workload regimes with no
   tuning, while every fixed threshold is at least 2.5$\times$ worse (up to
-  133$\times$) in some regime (\cref{sec:eval-llm}). Our probing variant beats a Prequal-style
+  133$\times$) in some regime. On replayed Mooncake traces the best threshold
+  changes (large $T$ wins) and the best synthetic one ($T{=}4$) is up to
+  8.5$\times$ off, while our cost-aware ring-2 is within 1.5$\times$ in 90\% of cells but
+  up to 3$\times$ off at saturation (\cref{sec:eval-llm}). Our probing variant beats a Prequal-style
   prober~\citep{prequal2024} at equal probe cost (\cref{sec:eval-probing}).
 \end{enumerate}
 
@@ -372,7 +379,7 @@ hold only about 19 requests and sampling noise raises the busiest share.
 \label{sec:eval-models}
 A natural objection is that the learner is too simple. We repeat the
 comparison with a quadratic queue term, with the router's own smoothed latency
-for each server as a third feature, and with an optimistic (LinUCB-style,
+for each server as a third feature, and with a non-linear radial-basis function of the queue length, and with an optimistic (LinUCB-style,
 lower-confidence-bound) learner, at 50 and 200\,ms staleness with 16
 routers. \Cref{tab:models} summarises the steady-state results
 (\cref{fig:models} in the appendix has the full set).
@@ -390,15 +397,16 @@ routers. \Cref{tab:models} summarises the steady-state results
 queue only            & 1{,}055 & 151 / 141 & 12{,}537 & 238 / 279\\
 + queue$^2$           & 59{,}180 & 150 / 142 & 72{,}354 & 225 / 276\\
 + own latency         & 3{,}044 & 153 / 141 & 29{,}242 & 234 / 250\\
++ non-linear (RBF)    & 490 & 149 / 141 & 13{,}316 & 222 / 251\\
 LinUCB (queue)        & 13{,}568 & -- & 15{,}618 & --\\
 LinUCB (+ own lat.)& 19{,}418 & -- & 23{,}312 & --\\
 \bottomrule
 \end{tabular}
 \end{table}
 A richer model never rescues argmin routing, and the quadratic one makes it
-far worse, because its fit oscillates with the herding it causes. Optimism
+far worse, because its fit oscillates with the herding it causes. A non-linear fit helps argmin at 50\,ms (0.5\,s) but not at 200\,ms (13.3\,s). Optimism
 herds too (13.6\,s at 50\,ms). Power-of-$d$ ranges over 141--153\,ms at 50\,ms
-and 225--279\,ms at 200\,ms regardless of the model. This matches
+and 222--279\,ms at 200\,ms regardless of the model. This matches
 \cref{prop:stampede}: herding is a property of acting deterministically on
 common information, not of the learner.
 
@@ -548,6 +556,41 @@ affinity (median 3.5$\times$, worst 75$\times$) do not come close.
 Choosing the threshold in hindsight on the evaluation seeds, which favours the
 thresholds, gives the same picture.
 
+\paragraph{Replay of real traces (\cref{fig:trace}).} The synthetic workload is ours, so
+we also replay the public Mooncake traces~\citep{mooncake2025} (Kimi production traffic: arrival
+times, input lengths and 512-token KV-block hashes) through the same routers. Replicas keep an LRU cache of
+2{,}000 blocks and reuse the longest cached leading run; they prefill at
+50{,}000 tokens/s. We compress trace time by 4--12$\times$ to vary load and report P99
+\emph{slowdown} (TTFT over unloaded prefill time), since a few 100k-token prompts dominate raw
+TTFT. We use the tool-and-agent trace (many requests share long prefixes) and the conversation
+trace (little reuse), with and without a gray failure, at 50 and 200\,ms
+staleness: 40 cells, thresholds chosen on seeds 0--4 and all routers evaluated on seeds 5--9.
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{fig16_trace.png}
+  \caption{Replay of Mooncake traces at 200\,ms staleness. Cache-oblivious JSQ and learned greedy
+  collapse at high load; thresholds, ring-2 and affinity separate only when load is high.}
+  \label{fig:trace}
+\end{figure}
+Three findings. First, herding is real on production traffic: at the highest load on the
+tool-and-agent trace, JSQ and learned greedy have P99 slowdowns of 884 and 805
+against 78 for prefix affinity, and they are the two worst routers (median regret
+1.9$\times$ and 1.5$\times$, worst 18.5$\times$ and 12.9$\times$). Second, the threshold ranking
+flips relative to the synthetic sweep: the best threshold is $T{=}32$ in 13 cells, $T{=}16$ in
+12, and $T{=}4$ (best single value on synthetic workloads) in only 7. $T{=}4$ is
+8.5$\times$ off in its worst cell, because at saturation a replica holding the prefix is worth
+queueing behind, and small $T$ gives up hits (hit rate 0.27 against 0.34 on the conversation
+trace at 12$\times$). Thresholds of 16 or more are within 1.3$\times$ everywhere, so a
+well-tuned large $T$ is simply good on these traces.
+Third, ring-$d$ is robust but not the best: learned ring-2 has median regret 1.13$\times$ and is within
+1.5$\times$ in 88\% of cells, but its worst case is 5.7$\times$, again at saturation, where it restricts
+requests to two replicas. Giving the learned score the request's uncached share as a
+feature (``cost-aware'') reduces this: ring-2 median 1.09$\times$, within
+1.5$\times$ in 90\% of cells, worst 3.0$\times$; ring-3 median 1.03$\times$, worst 4.2$\times$. The honest
+summary is that ring-$d$ removes the need to guess $T$ without knowing the regime, but a
+tuned large $T$ beats it on these traces, so its value is robustness to an unknown workload,
+not peak performance.
+
 \subsection{Robustness}
 \paragraph{Heavy-tailed service.} We use lognormal service times with
 coefficient of variation 2 and 4, at 50\,ms staleness with synchronised
@@ -669,8 +712,11 @@ optimistic variants do not change the conclusions, a deep model trained on
 rich request features might. The LLM-serving simulator models prefill
 replicas only: there is no batching, no decode phase, no KV-cache memory
 pressure beyond a prefix count, and one load signal (queue length). Its
-constants (8{,}000 tokens/s, Zipf popularity) are plausible, not measured from a
-production trace, and a real trace could change which regimes matter.
+synthetic constants (8{,}000 tokens/s, Zipf popularity) are plausible, not measured; the
+trace replay uses real arrivals, lengths and block sharing but the same modelled replicas, and it
+changed which threshold is best, so real deployments should be expected to differ again.
+The trace has no per-request deadline or priority, and we use one fixed cache size
+and prefill rate.
 The age-aware split needs the number of routers and a good estimate of the
 total arrival rate. The Prequal baseline is our re-implementation
 from the paper's description and is tuned in its favour, but it is not the

@@ -60,6 +60,15 @@ Unless stated otherwise: 16 routers, queueing model, ρ = 0.9, P99 latency.
    (T=4) is up to 11.2× worse (others up to 133×). Under a replica gray failure
    ring-3 beats the best threshold at every staleness level.
 
+8. **Real traces** (`trace_sim.py`, Mooncake FAST'25 traces in `research/data/`; paper §5).
+   Replaying production arrivals, lengths and KV-block sharing (40 cells: 2 traces ×
+   5 loads × 2 staleness × healthy/gray) confirms herding (JSQ and learned greedy
+   collapse at high load: slowdown 884/805 vs 78 for affinity) and that no fixed
+   threshold is safe, but the best threshold flips from T=4 (synthetic) to T≥16, and
+   **ring-d is not the best router there**: median regret 1.13× (cost-aware 1.09×),
+   worst 5.7× (3.0×) at saturation, versus 1.00× for plain affinity / large T.
+   Reproduce: `python -m research.run trace; python -m research.run trace_cost`.
+
 ## Simulators
 
 | | `sim.py` (queueing model) | `llm_sim.py` (LLM serving) |
