@@ -43,10 +43,21 @@ from __future__ import annotations
 
 import heapq
 import math
+import os
 import random
+from functools import lru_cache
 from collections import OrderedDict, deque
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional
+
+
+@lru_cache(maxsize=None)
+def empirical(max_steps: int = 100, max_tool: float = 300.0):
+    """Task lengths and tool latencies of real coding-agent sessions (TraceLab), clipped to a sane range."""
+    import numpy as np
+    z = np.load(os.path.join(os.path.dirname(__file__), "data", "agent_empirical.npz"))
+    return (np.minimum(z["steps"], max_steps).astype(int).tolist(),
+            np.minimum(z["tool"], max_tool).astype(float).tolist())
 
 
 @dataclass(frozen=True)
@@ -65,6 +76,7 @@ class AgentScenario:
     duration: float = 600.0           # arrival window
     warmup: float = 100.0
     drain: float = 300.0
+    trace: bool = False               # draw task lengths and tool times from the TraceLab empirical distributions
     surge_factor: float = 1.0         # > 1: rate multiplier during [surge_start, surge_end)
     surge_start: float = 150.0
     surge_end: float = 210.0
@@ -74,6 +86,15 @@ class AgentScenario:
         row = asdict(self)
         row["scenario"] = "surge" if self.surge_factor != 1.0 else "steady"
         return row
+
+    @classmethod
+    def from_trace(cls, **kw) -> "AgentScenario":
+        """Scenario whose means (used for capacity and the `mean` length policy) match the empirical data."""
+        steps, tool = empirical()
+        base = dict(trace=True, mean_steps=sum(steps) / len(steps), tool_sec=sum(tool) / len(tool),
+                    duration=1800.0, warmup=300.0, drain=900.0)
+        base.update(kw)
+        return cls(**base)
 
     @property
     def capacity_tasks_per_sec(self) -> float:
@@ -90,6 +111,7 @@ class Policy:
     length: str = "oracle"      # task: oracle | pred | mean
     sigma: float = 0.5          # pred: log-noise of the length estimate
     d: float = 7.5              # little: target queueing wait in seconds
+    df: float = 0.0             # little: if > 0, target wait as a fraction of the client timeout (overrides d)
     kvm: float = 1.0            # little: admit up to kvm x KV capacity (tasks in tool calls can be evicted)
     n: float = 32.0             # cap: maximum number of admitted tasks
     fifo: bool = False          # cap/task: serve in arrival order instead of by progress
@@ -154,6 +176,7 @@ def simulate_agents(sc: AgentScenario, policy: str, seed: int = 0, policy_kwargs
     ewma_s, ewma_tau = s, 0.0         # online estimates used by `little` (priors: step time, no tool time)
     last_done: Dict[int, float] = {}
 
+    emp_steps, emp_tool = empirical() if sc.trace else (None, None)
     base_rate = sc.load * sc.capacity_tasks_per_sec
     t, tid = 0.0, 0
     while True:
@@ -161,9 +184,12 @@ def simulate_agents(sc: AgentScenario, policy: str, seed: int = 0, policy_kwargs
         t += rng.expovariate(rate)
         if t >= sc.duration:
             break
-        L = 1
-        while rng.random() > p_geo:
-            L += 1
+        if sc.trace:
+            L = rng.choice(emp_steps)
+        else:
+            L = 1
+            while rng.random() > p_geo:
+                L += 1
         est = max(1.0, L * math.exp(rng.gauss(0.0, pol.sigma)))
         task = _Task(tid, L, est, t)
         tasks.append(task)
@@ -269,7 +295,7 @@ def simulate_agents(sc: AgentScenario, policy: str, seed: int = 0, policy_kwargs
                 accept = qlen < pol.q
             elif pol.kind in ("cap", "little"):
                 recognised = task.id in admitted and not (pol.ident == "infer" and rng.random() > pol.p_id)
-                limit = pol.n if pol.kind == "cap" else min(C * (ewma_s + ewma_tau + pol.d) / ewma_s, pol.kvm * sc.kv_tasks)
+                limit = pol.n if pol.kind == "cap" else min(C * (ewma_s + ewma_tau + (pol.df * sc.timeout if pol.df > 0 else pol.d)) / ewma_s, pol.kvm * sc.kv_tasks)
                 accept = recognised or len(admitted) < limit
                 if task.id in last_done and task.tries == 0 and kind == "submit" and accept:
                     ewma_tau += 0.05 * ((now - last_done.pop(task.id)) - ewma_tau)
@@ -304,7 +330,7 @@ def simulate_agents(sc: AgentScenario, policy: str, seed: int = 0, policy_kwargs
                 if task.done >= task.L:
                     finish(task, "complete", now)
                 else:
-                    push(now + rng.expovariate(1.0 / sc.tool_sec), "submit", task)
+                    push(now + (rng.choice(emp_tool) if sc.trace else rng.expovariate(1.0 / sc.tool_sec)), "submit", task)
             dispatch(now)
         else:                                            # timeout
             req = payload

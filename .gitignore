@@ -52,3 +52,4 @@ paper/*.log
 paper/*.out
 paper/*.pdf
 paper/build/
+research/data/tracelab/*.duckdb

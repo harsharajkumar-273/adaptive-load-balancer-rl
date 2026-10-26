@@ -70,7 +70,7 @@ def _line(ax, df, policy, x, metric):
     ax.fill_between(med.index, lo.values, hi.values, color=color, alpha=0.10, linewidth=0)
 
 
-def overload_figure(df: pd.DataFrame, out: List[str]) -> None:
+def overload_figure(df: pd.DataFrame, out: List[str], fname: str = "figA1_overload.png", tag: str = "Overload sweep") -> None:
     fig, axes = plt.subplots(1, 3, figsize=(15.0, 4.0))
     for ax, (metric, ylabel) in zip(axes, [("goodput_norm", "goodput (completed steps / capacity)"),
                                            ("lost", "fraction of tasks lost mid-way"),
@@ -85,13 +85,13 @@ def overload_figure(df: pd.DataFrame, out: List[str]) -> None:
     h, l = axes[0].get_legend_handles_labels()
     fig.legend(h, l, frameon=False, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=3)
     fig.tight_layout()
-    _save(fig, "figA1_overload.png")
+    _save(fig, fname)
     for metric, name in [("goodput_norm", "goodput (completed steps / capacity)"), ("lost", "tasks lost mid-way"),
                          ("wasted", "server time wasted"), ("p99_task_s", "P99 task latency (s) of completed tasks"),
                          ("completed", "fraction of arriving tasks completed")]:
         t = df.groupby(["policy", "load"])[metric].median().unstack()
         order = [p for p in HEAD if p in t.index] + [p for p in t.index if p not in HEAD]
-        out += [f"## Overload sweep: {name} (median over seeds)\n", _md(t.loc[order]), ""]
+        out += [f"## {tag}: {name} (median over seeds)\n", _md(t.loc[order]), ""]
 
 
 SENSITIVITY = [("shed|q=", [4, 16, 64], "per-request queue limit Q"), ("cap|n=", [16, 32, 64, 128], "task cap N"),
@@ -154,8 +154,9 @@ def surge_figure(df: pd.DataFrame, out: List[str]) -> None:
 FAMILIES = {"shed": "shed|q=", "cap": "cap|n=", "task work budget": "task|length=mean|h="}
 
 
-def regime_figure(df: pd.DataFrame, out: List[str]) -> None:
-    keys = ["mean_steps", "tool_sec", "timeout", "kv_tasks"]
+def regime_figure(df: pd.DataFrame, out: List[str], keys=None, fname: str = "figA4_regimes.png",
+                  tag: str = "synthetic workloads at 2.4x overload") -> None:
+    keys = keys or ["mean_steps", "tool_sec", "timeout", "kv_tasks"]
     sel = df[df.seed < 5].groupby(keys + ["policy"]).goodput_norm.median().unstack()
     ev = df[df.seed >= 5].groupby(keys + ["policy"]).goodput_norm.median().unstack()
     best = ev.max(axis=1)
@@ -181,12 +182,12 @@ def regime_figure(df: pd.DataFrame, out: List[str]) -> None:
     _style(ax, "goodput relative to the best policy in that regime", "fraction of regimes ≤ x")
     ax.legend(frameon=False, fontsize=7.5, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2)
     fig.tight_layout()
-    _save(fig, "figA4_regimes.png")
+    _save(fig, fname)
     rows = ["| policy | median | 10th pct | worst | regimes within 0.9 of best |", "|:---|:---:|:---:|:---:|:---:|"]
     for name, series in cols.items():
         rows.append(f"| {name} | {series.median():.2f} | {series.quantile(0.1):.2f} | {series.min():.2f} | "
                     f"{(series >= 0.9).mean() * 100:.0f}% |")
-    out += [f"## Goodput relative to the best policy per regime, {len(frac)} regimes at 2.4x overload "
+    out += [f"## Goodput relative to the best policy per regime, {len(frac)} regimes, {tag} "
             "(parameters chosen on seeds 0-4, evaluation on seeds 5-9)\n", "\n".join(rows), ""]
     for fam, prefix in FAMILIES.items():
         members = [c for c in sel.columns if str(c).startswith(prefix)]
@@ -265,6 +266,18 @@ def main() -> None:
         surge_figure(pd.read_csv(paths["agents_surge"]), out)
     if os.path.exists(paths["agents_regimes"]):
         regime_figure(pd.read_csv(paths["agents_regimes"]), out)
+    tr = os.path.join(RESULTS, "agents_trace.csv")
+    if os.path.exists(tr):
+        t = pd.read_csv(tr)
+        overload_figure(t[t.kv_tasks == 64], out, "figA7_trace_overload.png", "Trace-calibrated overload sweep (KV 64)")
+        for kv in (16, 256):
+            sub = t[t.kv_tasks == kv].groupby(["policy", "load"]).goodput_norm.median().unstack()
+            out += [f"## Trace-calibrated goodput, KV capacity {kv} tasks (median)\n",
+                    _md(sub.loc[[p for p in HEAD if p in sub.index]]), ""]
+    trr = os.path.join(RESULTS, "agents_trace_regimes.csv")
+    if os.path.exists(trr):
+        regime_figure(pd.read_csv(trr), out, ["timeout", "kv_tasks", "load"], "figA8_trace_regimes.png",
+                      "trace-calibrated tasks")
     if os.path.exists(paths["agents_retries"]):
         retries_table(pd.read_csv(paths["agents_retries"]), out)
     fluid_check(out)

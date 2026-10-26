@@ -240,7 +240,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | task|length=pred|sigma=0.5|h=20 | 0.94 | 0.95 |
 | task|length=pred|sigma=0.5|h=40 | 0.99 | 0.99 |
 
-## Goodput relative to the best policy per regime, 81 regimes at 2.4x overload (parameters chosen on seeds 0-4, evaluation on seeds 5-9)
+## Goodput relative to the best policy per regime, 81 regimes, synthetic workloads at 2.4x overload (parameters chosen on seeds 0-4, evaluation on seeds 5-9)
 
 | policy | median | 10th pct | worst | regimes within 0.9 of best |
 |:---|:---:|:---:|:---:|:---:|
@@ -259,6 +259,223 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 - best cap value per regime: 64: 29, 32: 23, 128: 16, 16: 13
 
 - best task work budget value per regime: 20: 27, 40: 25, 10: 21, 5: 5, 80: 3
+
+
+KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best policy, not to capacity.
+
+## Trace-calibrated overload sweep (KV 64): goodput (completed steps / capacity) (median over seeds)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 0.58 | 0.88 | 0.41 | 0.29 | 0.21 | 0.14 |
+| prog | 0.58 | 0.88 | 0.74 | 0.42 | 0.18 | 0.07 |
+| shed|q=16 | 0.58 | 0.87 | 0.82 | 0.70 | 0.61 | 0.57 |
+| cap|n=64 | 0.58 | 0.87 | 0.94 | 0.93 | 0.94 | 0.93 |
+| task|length=mean|h=20 | 0.58 | 0.82 | 0.87 | 0.88 | 0.89 | 0.89 |
+| little|d=5 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
+| little|d=5|ident=infer|p_id=0.7 | 0.58 | 0.86 | 0.88 | 0.84 | 0.81 | 0.79 |
+| cap|n=128 | 0.58 | 0.88 | 0.85 | 0.79 | 0.79 | 0.77 |
+| cap|n=16 | 0.25 | 0.25 | 0.23 | 0.25 | 0.24 | 0.25 |
+| cap|n=32 | 0.48 | 0.48 | 0.49 | 0.49 | 0.49 | 0.50 |
+| little|d=1 | 0.58 | 0.85 | 0.90 | 0.92 | 0.90 | 0.92 |
+| little|d=10 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
+| little|d=2.5 | 0.58 | 0.86 | 0.92 | 0.92 | 0.92 | 0.94 |
+| little|d=5|fifo=1 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
+| little|d=5|hint=1 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
+| little|d=5|ident=infer|p_id=0.5 | 0.58 | 0.80 | 0.78 | 0.69 | 0.65 | 0.59 |
+| little|d=5|ident=infer|p_id=0.9 | 0.58 | 0.86 | 0.92 | 0.91 | 0.91 | 0.91 |
+| shed|q=4 | 0.58 | 0.84 | 0.83 | 0.74 | 0.64 | 0.57 |
+| shed|q=64 | 0.58 | 0.88 | 0.49 | 0.42 | 0.45 | 0.49 |
+| task|length=mean|h=10 | 0.43 | 0.45 | 0.44 | 0.45 | 0.45 | 0.46 |
+| task|length=mean|h=40 | 0.58 | 0.89 | 0.96 | 0.94 | 0.94 | 0.94 |
+| task|length=mean|h=5 | 0.21 | 0.22 | 0.20 | 0.20 | 0.21 | 0.22 |
+| task|length=mean|h=80 | 0.58 | 0.88 | 0.89 | 0.84 | 0.84 | 0.84 |
+| task|length=oracle|h=10 | 0.19 | 0.25 | 0.30 | 0.36 | 0.46 | 0.64 |
+| task|length=oracle|h=20 | 0.26 | 0.34 | 0.41 | 0.49 | 0.62 | 0.84 |
+| task|length=oracle|h=40 | 0.36 | 0.46 | 0.55 | 0.66 | 0.83 | 1.00 |
+| task|length=pred|sigma=0.5|h=10 | 0.21 | 0.27 | 0.32 | 0.40 | 0.50 | 0.68 |
+| task|length=pred|sigma=0.5|h=20 | 0.29 | 0.37 | 0.45 | 0.53 | 0.67 | 0.91 |
+| task|length=pred|sigma=0.5|h=40 | 0.37 | 0.49 | 0.59 | 0.70 | 0.89 | 1.00 |
+
+## Trace-calibrated overload sweep (KV 64): tasks lost mid-way (median over seeds)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 0.00 | 0.00 | 0.24 | 0.40 | 0.71 | 0.96 |
+| prog | 0.00 | 0.00 | 0.38 | 0.73 | 0.92 | 0.98 |
+| shed|q=16 | 0.00 | 0.00 | 0.07 | 0.14 | 0.21 | 0.25 |
+| cap|n=64 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=mean|h=20 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5|ident=infer|p_id=0.7 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 |
+| cap|n=128 | 0.00 | 0.00 | 0.21 | 0.27 | 0.23 | 0.15 |
+| cap|n=16 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| cap|n=32 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=2.5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5|fifo=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5|hint=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5|ident=infer|p_id=0.5 | 0.00 | 0.01 | 0.05 | 0.07 | 0.07 | 0.06 |
+| little|d=5|ident=infer|p_id=0.9 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| shed|q=4 | 0.00 | 0.01 | 0.07 | 0.13 | 0.21 | 0.25 |
+| shed|q=64 | 0.00 | 0.00 | 0.15 | 0.20 | 0.22 | 0.24 |
+| task|length=mean|h=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=mean|h=40 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 |
+| task|length=mean|h=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=mean|h=80 | 0.00 | 0.00 | 0.12 | 0.17 | 0.14 | 0.09 |
+| task|length=oracle|h=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=oracle|h=20 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=oracle|h=40 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=pred|sigma=0.5|h=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=pred|sigma=0.5|h=20 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=pred|sigma=0.5|h=40 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+## Trace-calibrated overload sweep (KV 64): server time wasted (median over seeds)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 0.00 | 0.02 | 0.52 | 0.69 | 0.81 | 0.88 |
+| prog | 0.01 | 0.02 | 0.17 | 0.35 | 0.61 | 0.76 |
+| shed|q=16 | 0.00 | 0.02 | 0.15 | 0.30 | 0.41 | 0.48 |
+| cap|n=64 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| task|length=mean|h=20 | 0.01 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=5 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=5|ident=infer|p_id=0.7 | 0.01 | 0.01 | 0.03 | 0.06 | 0.08 | 0.09 |
+| cap|n=128 | 0.01 | 0.02 | 0.09 | 0.12 | 0.13 | 0.14 |
+| cap|n=16 | 0.00 | 0.00 | 0.00 | 0.02 | 0.02 | 0.01 |
+| cap|n=32 | 0.01 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=10 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| little|d=2.5 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| little|d=5|fifo=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=5|hint=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|d=5|ident=infer|p_id=0.5 | 0.01 | 0.04 | 0.13 | 0.21 | 0.26 | 0.32 |
+| little|d=5|ident=infer|p_id=0.9 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| shed|q=4 | 0.00 | 0.04 | 0.15 | 0.29 | 0.40 | 0.49 |
+| shed|q=64 | 0.00 | 0.02 | 0.38 | 0.46 | 0.48 | 0.52 |
+| task|length=mean|h=10 | 0.00 | 0.01 | 0.00 | 0.01 | 0.00 | 0.01 |
+| task|length=mean|h=40 | 0.01 | 0.01 | 0.02 | 0.02 | 0.03 | 0.02 |
+| task|length=mean|h=5 | 0.01 | 0.00 | 0.01 | 0.00 | 0.00 | 0.00 |
+| task|length=mean|h=80 | 0.01 | 0.02 | 0.07 | 0.09 | 0.09 | 0.08 |
+| task|length=oracle|h=10 | -0.00 | 0.00 | 0.00 | 0.00 | -0.00 | -0.00 |
+| task|length=oracle|h=20 | -0.00 | -0.00 | -0.00 | 0.00 | 0.00 | 0.00 |
+| task|length=oracle|h=40 | -0.00 | 0.00 | 0.00 | -0.00 | 0.00 | 0.00 |
+| task|length=pred|sigma=0.5|h=10 | -0.00 | 0.00 | 0.00 | 0.00 | -0.00 | -0.00 |
+| task|length=pred|sigma=0.5|h=20 | 0.00 | -0.00 | -0.00 | 0.00 | -0.00 | -0.00 |
+| task|length=pred|sigma=0.5|h=40 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+
+## Trace-calibrated overload sweep (KV 64): P99 task latency (s) of completed tasks (median over seeds)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 817.52 | 916.28 | 598.36 | 560.06 | 669.14 | 799.82 |
+| prog | 838.49 | 865.01 | 942.76 | 977.95 | 923.72 | 708.41 |
+| shed|q=16 | 817.52 | 877.16 | 799.00 | 654.88 | 495.84 | 357.82 |
+| cap|n=64 | 838.49 | 830.99 | 826.59 | 780.17 | 866.32 | 850.79 |
+| task|length=mean|h=20 | 827.30 | 836.81 | 825.34 | 863.53 | 857.82 | 849.08 |
+| little|d=5 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
+| little|d=5|ident=infer|p_id=0.7 | 809.09 | 878.37 | 880.84 | 881.13 | 832.84 | 834.24 |
+| cap|n=128 | 838.49 | 867.22 | 878.99 | 903.33 | 897.26 | 964.50 |
+| cap|n=16 | 802.00 | 860.29 | 824.18 | 814.77 | 804.92 | 809.40 |
+| cap|n=32 | 809.14 | 902.98 | 861.56 | 860.85 | 856.72 | 817.97 |
+| little|d=1 | 832.32 | 817.84 | 892.24 | 882.97 | 871.30 | 878.02 |
+| little|d=10 | 817.52 | 871.97 | 871.23 | 833.18 | 875.17 | 858.69 |
+| little|d=2.5 | 817.20 | 828.18 | 851.45 | 860.86 | 857.79 | 899.00 |
+| little|d=5|fifo=1 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
+| little|d=5|hint=1 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
+| little|d=5|ident=infer|p_id=0.5 | 809.09 | 807.15 | 767.29 | 703.67 | 703.99 | 554.29 |
+| little|d=5|ident=infer|p_id=0.9 | 809.09 | 858.14 | 877.27 | 893.36 | 903.50 | 843.68 |
+| shed|q=4 | 845.06 | 829.79 | 757.16 | 615.27 | 476.11 | 326.33 |
+| shed|q=64 | 817.52 | 934.86 | 813.38 | 732.10 | 617.58 | 436.75 |
+| task|length=mean|h=10 | 797.57 | 802.12 | 810.92 | 877.67 | 837.35 | 860.81 |
+| task|length=mean|h=40 | 838.49 | 892.34 | 886.90 | 908.28 | 882.31 | 860.50 |
+| task|length=mean|h=5 | 866.18 | 880.31 | 774.71 | 827.79 | 827.68 | 942.30 |
+| task|length=mean|h=80 | 838.49 | 865.01 | 888.24 | 964.96 | 939.46 | 938.55 |
+| task|length=oracle|h=10 | 344.69 | 322.95 | 299.19 | 256.00 | 215.75 | 169.66 |
+| task|length=oracle|h=20 | 406.89 | 358.92 | 343.97 | 325.65 | 312.39 | 251.59 |
+| task|length=oracle|h=40 | 541.59 | 461.93 | 412.72 | 392.39 | 359.50 | 314.92 |
+| task|length=pred|sigma=0.5|h=10 | 383.87 | 348.41 | 318.84 | 308.38 | 274.65 | 217.78 |
+| task|length=pred|sigma=0.5|h=20 | 457.93 | 408.79 | 403.44 | 369.46 | 330.13 | 306.82 |
+| task|length=pred|sigma=0.5|h=40 | 548.29 | 487.46 | 457.38 | 421.77 | 380.71 | 330.17 |
+
+## Trace-calibrated overload sweep (KV 64): fraction of arriving tasks completed (median over seeds)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 1.00 | 1.00 | 0.75 | 0.60 | 0.29 | 0.04 |
+| prog | 1.00 | 1.00 | 0.62 | 0.27 | 0.08 | 0.02 |
+| shed|q=16 | 1.00 | 1.00 | 0.91 | 0.80 | 0.68 | 0.55 |
+| cap|n=64 | 1.00 | 0.97 | 0.77 | 0.60 | 0.40 | 0.24 |
+| task|length=mean|h=20 | 1.00 | 0.92 | 0.73 | 0.55 | 0.37 | 0.22 |
+| little|d=5 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
+| little|d=5|ident=infer|p_id=0.7 | 1.00 | 0.96 | 0.77 | 0.56 | 0.39 | 0.23 |
+| cap|n=128 | 1.00 | 1.00 | 0.71 | 0.49 | 0.33 | 0.20 |
+| cap|n=16 | 0.42 | 0.27 | 0.19 | 0.16 | 0.10 | 0.07 |
+| cap|n=32 | 0.81 | 0.53 | 0.40 | 0.30 | 0.20 | 0.12 |
+| little|d=1 | 1.00 | 0.95 | 0.75 | 0.57 | 0.38 | 0.23 |
+| little|d=10 | 1.00 | 0.98 | 0.78 | 0.59 | 0.39 | 0.23 |
+| little|d=2.5 | 1.00 | 0.97 | 0.76 | 0.59 | 0.39 | 0.23 |
+| little|d=5|fifo=1 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
+| little|d=5|hint=1 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
+| little|d=5|ident=infer|p_id=0.5 | 1.00 | 0.96 | 0.80 | 0.63 | 0.46 | 0.30 |
+| little|d=5|ident=infer|p_id=0.9 | 1.00 | 0.97 | 0.76 | 0.58 | 0.37 | 0.24 |
+| shed|q=4 | 1.00 | 0.99 | 0.91 | 0.82 | 0.70 | 0.55 |
+| shed|q=64 | 1.00 | 1.00 | 0.77 | 0.66 | 0.57 | 0.48 |
+| task|length=mean|h=10 | 0.73 | 0.49 | 0.37 | 0.28 | 0.18 | 0.11 |
+| task|length=mean|h=40 | 1.00 | 0.99 | 0.80 | 0.59 | 0.40 | 0.24 |
+| task|length=mean|h=5 | 0.35 | 0.22 | 0.17 | 0.13 | 0.09 | 0.05 |
+| task|length=mean|h=80 | 1.00 | 1.00 | 0.73 | 0.52 | 0.36 | 0.21 |
+| task|length=oracle|h=10 | 0.84 | 0.82 | 0.81 | 0.79 | 0.76 | 0.73 |
+| task|length=oracle|h=20 | 0.90 | 0.87 | 0.86 | 0.84 | 0.81 | 0.78 |
+| task|length=oracle|h=40 | 0.94 | 0.92 | 0.90 | 0.89 | 0.86 | 0.81 |
+| task|length=pred|sigma=0.5|h=10 | 0.84 | 0.82 | 0.80 | 0.79 | 0.76 | 0.73 |
+| task|length=pred|sigma=0.5|h=20 | 0.89 | 0.87 | 0.86 | 0.84 | 0.81 | 0.78 |
+| task|length=pred|sigma=0.5|h=40 | 0.94 | 0.91 | 0.90 | 0.88 | 0.86 | 0.79 |
+
+## Trace-calibrated goodput, KV capacity 16 tasks (median)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 0.25 | 0.25 | 0.26 | 0.23 | 0.17 | 0.10 |
+| prog | 0.21 | 0.18 | 0.17 | 0.14 | 0.10 | 0.05 |
+| shed|q=16 | 0.28 | 0.30 | 0.31 | 0.33 | 0.36 | 0.39 |
+| cap|n=64 | 0.22 | 0.20 | 0.18 | 0.17 | 0.17 | 0.18 |
+| task|length=mean|h=20 | 0.20 | 0.19 | 0.19 | 0.17 | 0.18 | 0.20 |
+| little|d=5 | 0.25 | 0.25 | 0.23 | 0.25 | 0.24 | 0.25 |
+| little|d=5|ident=infer|p_id=0.7 | 0.21 | 0.21 | 0.21 | 0.21 | 0.19 | 0.21 |
+
+## Trace-calibrated goodput, KV capacity 256 tasks (median)
+
+| policy | 0.6 | 0.9 | 1.2 | 1.6 | 2.4 | 4.0 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| none | 0.58 | 0.90 | 1.16 | 0.92 | 0.36 | 0.14 |
+| prog | 0.58 | 0.89 | 0.93 | 0.72 | 0.32 | 0.08 |
+| shed|q=16 | 0.58 | 0.89 | 0.91 | 0.81 | 0.70 | 0.61 |
+| cap|n=64 | 0.58 | 0.87 | 0.94 | 0.93 | 0.94 | 0.93 |
+| task|length=mean|h=20 | 0.58 | 0.82 | 0.89 | 0.88 | 0.88 | 0.91 |
+| little|d=5 | 0.58 | 0.90 | 1.06 | 1.07 | 1.04 | 1.04 |
+| little|d=5|ident=infer|p_id=0.7 | 0.58 | 0.89 | 1.03 | 1.00 | 1.01 | 0.99 |
+
+## Goodput relative to the best policy per regime, 18 regimes, trace-calibrated tasks (parameters chosen on seeds 0-4, evaluated on 5-9) (parameters chosen on seeds 0-4, evaluation on seeds 5-9)
+
+| policy | median | 10th pct | worst | regimes within 0.9 of best |
+|:---|:---:|:---:|:---:|:---:|
+| no admission control | 0.32 | 0.12 | 0.08 | 0% |
+| serve by progress | 0.28 | 0.11 | 0.08 | 0% |
+| shed (tuned per regime) | 0.78 | 0.63 | 0.63 | 28% |
+| shed (one value for all regimes) | 0.74 | 0.61 | 0.59 | 28% |
+| cap (tuned per regime) | 0.93 | 0.69 | 0.61 | 61% |
+| cap (one value for all regimes) | 0.86 | 0.49 | 0.44 | 44% |
+| task work budget (tuned per regime) | 0.95 | 0.74 | 0.64 | 67% |
+| task work budget (one value for all regimes) | 0.93 | 0.46 | 0.37 | 56% |
+| Little's-law cap (D=5, never tuned) | 0.96 | 0.61 | 0.12 | 61% |
+
+- best shed value per regime: 64: 8, 16: 5, 4: 5
+
+- best cap value per regime: 64: 8, 32: 4, 128: 4, 16: 2
+
+- best task work budget value per regime: 40: 11, 10: 6, 80: 1
 
 
 KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best policy, not to capacity.
