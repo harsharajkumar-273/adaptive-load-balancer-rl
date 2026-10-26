@@ -75,7 +75,7 @@ our remedy: at saturation, maximal locality wins and our variant is up to 3$\tim
 from the best tuned threshold.
 With three live probes it matches an oracle that knows every server's speed
 (84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a
-gray failure (112 vs.\ 144\,ms). The study covers 46{,}930 simulated runs.\ifrealsys{} A multi-process prototype validates the simulator.\fi
+gray failure (112 vs.\ 144\,ms). The study covers 56{,}050 simulated runs.\ifrealsys{} A multi-process prototype validates the simulator.\fi
 \end{abstract}
 
 % ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ scenario, the fastest backend serves at 20\% speed from $t{=}12$\,s. That
 scenario runs at $\rho=0.75$ so the system stays stable (89\% utilisation
 after the failure). We measure herding with the Fano factor (variance/mean)
 of per-backend arrival counts in 50\,ms bins: independent routing gives about
-1, and a stampede gives far more. In total the study has 46{,}930 simulated
+1, and a stampede gives far more. In total the study has 56{,}050 simulated
 runs.
 
 \paragraph{Policies.} \emph{Heuristics:} JSQ, SED (shortest expected delay with

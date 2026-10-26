@@ -8,7 +8,7 @@ the same "best" server. **Do learned routers herd too, why, and what prevents it
 
 The paper draft is [`../paper/main.tex`](../paper/main.tex). Every number below
 comes from [`results/summary.md`](results/summary.md) (median and interquartile
-range over 10 seeds; 46,930 simulated runs). These are simulation results under
+range over 10 seeds; 56,050 simulated runs). These are simulation results under
 the stated assumptions. The real-system validation (`realsys.py`, instructions in
 [`RUNNING_REALSYS.md`](RUNNING_REALSYS.md)) is a separate, long-running experiment
 whose results are not yet part of the paper.
