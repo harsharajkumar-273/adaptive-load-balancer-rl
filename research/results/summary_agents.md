@@ -11,7 +11,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | 0.58 | 0.87 | 0.87 | 0.67 | 0.53 | 0.46 |
 | cap|n=64 | 0.58 | 0.87 | 1.03 | 1.01 | 1.02 | 1.02 |
 | task|length=mean|h=20 | 0.58 | 0.87 | 1.01 | 1.01 | 1.03 | 1.03 |
-| little|d=5 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
+| little|df=0.1 | 0.58 | 0.87 | 1.04 | 1.01 | 1.03 | 1.01 |
 | little|d=5|ident=infer|p_id=0.7 | 0.58 | 0.87 | 1.03 | 1.00 | 1.00 | 1.00 |
 | cap|n=128 | 0.58 | 0.87 | 1.02 | 0.92 | 0.90 | 0.91 |
 | cap|n=16 | 0.43 | 0.45 | 0.45 | 0.46 | 0.45 | 0.45 |
@@ -19,10 +19,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | 0.58 | 0.87 | 1.02 | 1.00 | 1.02 | 1.02 |
 | little|d=10 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
 | little|d=2.5 | 0.58 | 0.87 | 1.03 | 1.02 | 1.02 | 1.02 |
+| little|d=5 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
 | little|d=5|fifo=1 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
 | little|d=5|hint=1 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
 | little|d=5|ident=infer|p_id=0.5 | 0.58 | 0.87 | 1.01 | 0.96 | 0.92 | 0.90 |
 | little|d=5|ident=infer|p_id=0.9 | 0.58 | 0.87 | 1.04 | 1.01 | 1.02 | 1.00 |
+| little|df=0.05 | 0.58 | 0.87 | 1.03 | 1.01 | 1.02 | 1.00 |
+| little|df=0.2 | 0.58 | 0.87 | 1.04 | 1.02 | 1.03 | 1.02 |
 | shed|q=4 | 0.58 | 0.86 | 0.91 | 0.74 | 0.57 | 0.45 |
 | shed|q=64 | 0.58 | 0.87 | 0.63 | 0.50 | 0.49 | 0.45 |
 | task|length=mean|h=10 | 0.58 | 0.76 | 0.79 | 0.81 | 0.82 | 0.82 |
@@ -45,7 +48,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | 0.00 | 0.00 | 0.12 | 0.30 | 0.38 | 0.38 |
 | cap|n=64 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | task|length=mean|h=20 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
-| little|d=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|ident=infer|p_id=0.7 | 0.00 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 |
 | cap|n=128 | 0.00 | 0.00 | 0.12 | 0.22 | 0.19 | 0.12 |
 | cap|n=16 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
@@ -53,10 +56,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=2.5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|fifo=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|hint=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|ident=infer|p_id=0.5 | 0.00 | 0.00 | 0.02 | 0.05 | 0.06 | 0.05 |
 | little|d=5|ident=infer|p_id=0.9 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.05 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.2 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | shed|q=4 | 0.00 | 0.01 | 0.12 | 0.27 | 0.38 | 0.39 |
 | shed|q=64 | 0.00 | 0.00 | 0.23 | 0.35 | 0.37 | 0.37 |
 | task|length=mean|h=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
@@ -79,7 +85,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | -0.00 | 0.00 | 0.10 | 0.28 | 0.45 | 0.55 |
 | cap|n=64 | -0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | task|length=mean|h=20 | -0.00 | 0.00 | 0.00 | -0.00 | -0.00 | -0.00 |
-| little|d=5 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
+| little|df=0.1 | -0.00 | 0.00 | 0.00 | -0.00 | 0.00 | -0.00 |
 | little|d=5|ident=infer|p_id=0.7 | -0.00 | 0.00 | 0.00 | 0.01 | 0.02 | 0.02 |
 | cap|n=128 | -0.00 | 0.00 | 0.08 | 0.12 | 0.13 | 0.13 |
 | cap|n=16 | 0.00 | -0.00 | 0.00 | 0.00 | -0.00 | -0.00 |
@@ -87,10 +93,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | -0.00 | -0.00 | -0.00 | 0.00 | -0.00 | 0.00 |
 | little|d=10 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
 | little|d=2.5 | -0.00 | 0.00 | 0.00 | 0.00 | -0.00 | -0.00 |
+| little|d=5 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
 | little|d=5|fifo=1 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
 | little|d=5|hint=1 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
 | little|d=5|ident=infer|p_id=0.5 | -0.00 | 0.00 | 0.02 | 0.07 | 0.12 | 0.15 |
 | little|d=5|ident=infer|p_id=0.9 | -0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.05 | -0.00 | 0.00 | -0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.2 | -0.00 | 0.00 | -0.00 | -0.00 | -0.00 | -0.00 |
 | shed|q=4 | 0.00 | 0.01 | 0.10 | 0.27 | 0.44 | 0.56 |
 | shed|q=64 | -0.00 | 0.00 | 0.18 | 0.34 | 0.44 | 0.53 |
 | task|length=mean|h=10 | -0.00 | -0.00 | 0.00 | 0.00 | -0.00 | -0.00 |
@@ -113,7 +122,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | 132.41 | 134.95 | 196.44 | 185.76 | 138.88 | 128.17 |
 | cap|n=64 | 134.98 | 132.79 | 161.19 | 169.10 | 167.48 | 159.58 |
 | task|length=mean|h=20 | 134.98 | 133.93 | 152.18 | 157.51 | 151.57 | 143.25 |
-| little|d=5 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
+| little|df=0.1 | 132.41 | 136.59 | 208.54 | 216.40 | 218.86 | 206.34 |
 | little|d=5|ident=infer|p_id=0.7 | 125.83 | 140.73 | 204.93 | 205.13 | 223.20 | 206.20 |
 | cap|n=128 | 134.98 | 132.79 | 191.98 | 199.05 | 194.98 | 188.28 |
 | cap|n=16 | 125.59 | 144.48 | 129.17 | 150.86 | 133.33 | 147.55 |
@@ -121,10 +130,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | 132.41 | 133.73 | 177.83 | 185.06 | 189.61 | 179.69 |
 | little|d=10 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
 | little|d=2.5 | 132.41 | 135.54 | 195.92 | 212.33 | 199.63 | 215.00 |
+| little|d=5 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
 | little|d=5|fifo=1 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
 | little|d=5|hint=1 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
 | little|d=5|ident=infer|p_id=0.5 | 125.83 | 140.73 | 209.75 | 208.57 | 186.14 | 177.44 |
 | little|d=5|ident=infer|p_id=0.9 | 125.83 | 140.73 | 205.44 | 225.79 | 221.22 | 209.31 |
+| little|df=0.05 | 132.41 | 135.01 | 183.34 | 193.16 | 186.91 | 180.34 |
+| little|df=0.2 | 132.41 | 136.59 | 211.44 | 217.74 | 214.16 | 214.43 |
 | shed|q=4 | 136.72 | 139.31 | 157.89 | 151.51 | 128.56 | 117.63 |
 | shed|q=64 | 132.41 | 136.59 | 336.72 | 295.21 | 229.59 | 196.70 |
 | task|length=mean|h=10 | 128.02 | 130.31 | 133.96 | 138.41 | 132.40 | 133.57 |
@@ -147,7 +159,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | 1.00 | 1.00 | 0.84 | 0.59 | 0.39 | 0.24 |
 | cap|n=64 | 1.00 | 1.00 | 0.88 | 0.63 | 0.42 | 0.25 |
 | task|length=mean|h=20 | 1.00 | 1.00 | 0.86 | 0.63 | 0.42 | 0.25 |
-| little|d=5 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
+| little|df=0.1 | 1.00 | 1.00 | 0.87 | 0.63 | 0.41 | 0.25 |
 | little|d=5|ident=infer|p_id=0.7 | 1.00 | 1.00 | 0.87 | 0.63 | 0.41 | 0.26 |
 | cap|n=128 | 1.00 | 1.00 | 0.85 | 0.57 | 0.36 | 0.23 |
 | cap|n=16 | 0.77 | 0.51 | 0.38 | 0.27 | 0.18 | 0.11 |
@@ -155,10 +167,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | 1.00 | 1.00 | 0.85 | 0.62 | 0.42 | 0.25 |
 | little|d=10 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
 | little|d=2.5 | 1.00 | 1.00 | 0.86 | 0.63 | 0.42 | 0.25 |
+| little|d=5 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
 | little|d=5|fifo=1 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
 | little|d=5|hint=1 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
 | little|d=5|ident=infer|p_id=0.5 | 1.00 | 1.00 | 0.88 | 0.63 | 0.43 | 0.25 |
 | little|d=5|ident=infer|p_id=0.9 | 1.00 | 1.00 | 0.88 | 0.62 | 0.42 | 0.25 |
+| little|df=0.05 | 1.00 | 1.00 | 0.86 | 0.62 | 0.41 | 0.25 |
+| little|df=0.2 | 1.00 | 1.00 | 0.87 | 0.63 | 0.42 | 0.25 |
 | shed|q=4 | 1.00 | 0.99 | 0.84 | 0.63 | 0.41 | 0.25 |
 | shed|q=64 | 1.00 | 1.00 | 0.66 | 0.46 | 0.35 | 0.23 |
 | task|length=mean|h=10 | 1.00 | 0.87 | 0.67 | 0.50 | 0.33 | 0.20 |
@@ -192,13 +207,16 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little wait target D (s) | 2.5 | 1.02 |
 | little wait target D (s) | 5 | 1.03 |
 | little wait target D (s) | 10 | 1.03 |
+| little D / timeout | 0.05 | 1.02 |
+| little D / timeout | 0.1 | 1.03 |
+| little D / timeout | 0.2 | 1.03 |
 
 ## Value and cost of length information (median)
 
 | policy | load | work goodput | task goodput | long-task completion | tasks completed |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| little|d=5 | 1.6 | 1.02 | 1.00 | 0.62 | 0.63 |
-| little|d=5 | 4 | 1.02 | 1.03 | 0.24 | 0.25 |
+| little|df=0.1 | 1.6 | 1.01 | 0.99 | 0.63 | 0.63 |
+| little|df=0.1 | 4 | 1.01 | 1.02 | 0.25 | 0.25 |
 | task|length=mean|h=20 | 1.6 | 1.01 | 1.02 | 0.62 | 0.63 |
 | task|length=mean|h=20 | 4 | 1.03 | 1.02 | 0.25 | 0.25 |
 | task|length=pred|sigma=0.5|h=20 | 1.6 | 1.00 | 1.32 | 0.30 | 0.83 |
@@ -215,7 +233,7 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | shed|q=16 | 1.00 | 1.00 |
 | cap|n=64 | 1.00 | 1.00 |
 | task|length=mean|h=20 | 1.00 | 1.00 |
-| little|d=5 | 1.00 | 1.00 |
+| little|df=0.1 | 1.00 | 1.00 |
 | little|d=5|ident=infer|p_id=0.7 | 1.00 | 1.00 |
 | cap|n=128 | 1.00 | 1.00 |
 | cap|n=16 | 0.55 | 0.54 |
@@ -223,10 +241,13 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | little|d=1 | 1.00 | 1.00 |
 | little|d=10 | 1.00 | 1.00 |
 | little|d=2.5 | 1.00 | 1.00 |
+| little|d=5 | 1.00 | 1.00 |
 | little|d=5|fifo=1 | 1.00 | 1.00 |
 | little|d=5|hint=1 | 1.00 | 1.00 |
 | little|d=5|ident=infer|p_id=0.5 | 1.00 | 1.00 |
 | little|d=5|ident=infer|p_id=0.9 | 1.00 | 1.00 |
+| little|df=0.05 | 1.00 | 1.00 |
+| little|df=0.2 | 1.00 | 1.00 |
 | shed|q=4 | 1.00 | 1.00 |
 | shed|q=64 | 0.75 | 0.76 |
 | task|length=mean|h=10 | 0.92 | 0.92 |
@@ -245,14 +266,14 @@ Median over 10 seeds unless stated; goodput = completed steps / no-failure step 
 | policy | median | 10th pct | worst | regimes within 0.9 of best |
 |:---|:---:|:---:|:---:|:---:|
 | no admission control | 0.15 | 0.07 | 0.04 | 0% |
-| serve by progress | 0.19 | 0.04 | 0.03 | 2% |
+| serve by progress | 0.19 | 0.04 | 0.03 | 1% |
 | shed (tuned per regime) | 0.68 | 0.57 | 0.47 | 11% |
 | shed (one value for all regimes) | 0.65 | 0.52 | 0.47 | 9% |
 | cap (tuned per regime) | 0.99 | 0.91 | 0.75 | 91% |
-| cap (one value for all regimes) | 0.94 | 0.62 | 0.41 | 65% |
+| cap (one value for all regimes) | 0.93 | 0.62 | 0.41 | 65% |
 | task work budget (tuned per regime) | 0.99 | 0.88 | 0.56 | 85% |
 | task work budget (one value for all regimes) | 0.94 | 0.49 | 0.34 | 59% |
-| Little's-law cap (D=5, never tuned) | 0.99 | 0.58 | 0.35 | 85% |
+| Little's-law cap (D = 0.1 x timeout, never tuned) | 0.99 | 0.58 | 0.35 | 85% |
 
 - best shed value per regime: 64: 42, 4: 29, 16: 10
 
@@ -272,7 +293,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 0.58 | 0.87 | 0.82 | 0.70 | 0.61 | 0.57 |
 | cap|n=64 | 0.58 | 0.87 | 0.94 | 0.93 | 0.94 | 0.93 |
 | task|length=mean|h=20 | 0.58 | 0.82 | 0.87 | 0.88 | 0.89 | 0.89 |
-| little|d=5 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
+| little|df=0.1 | 0.58 | 0.87 | 0.93 | 0.92 | 0.94 | 0.93 |
 | little|d=5|ident=infer|p_id=0.7 | 0.58 | 0.86 | 0.88 | 0.84 | 0.81 | 0.79 |
 | cap|n=128 | 0.58 | 0.88 | 0.85 | 0.79 | 0.79 | 0.77 |
 | cap|n=16 | 0.25 | 0.25 | 0.23 | 0.25 | 0.24 | 0.25 |
@@ -280,10 +301,13 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | little|d=1 | 0.58 | 0.85 | 0.90 | 0.92 | 0.90 | 0.92 |
 | little|d=10 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
 | little|d=2.5 | 0.58 | 0.86 | 0.92 | 0.92 | 0.92 | 0.94 |
+| little|d=5 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
 | little|d=5|fifo=1 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
 | little|d=5|hint=1 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
 | little|d=5|ident=infer|p_id=0.5 | 0.58 | 0.80 | 0.78 | 0.69 | 0.65 | 0.59 |
 | little|d=5|ident=infer|p_id=0.9 | 0.58 | 0.86 | 0.92 | 0.91 | 0.91 | 0.91 |
+| little|df=0.05 | 0.58 | 0.85 | 0.92 | 0.93 | 0.92 | 0.93 |
+| little|df=0.2 | 0.58 | 0.86 | 0.92 | 0.93 | 0.93 | 0.94 |
 | shed|q=4 | 0.58 | 0.84 | 0.83 | 0.74 | 0.64 | 0.57 |
 | shed|q=64 | 0.58 | 0.88 | 0.49 | 0.42 | 0.45 | 0.49 |
 | task|length=mean|h=10 | 0.43 | 0.45 | 0.44 | 0.45 | 0.45 | 0.46 |
@@ -306,7 +330,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 0.00 | 0.00 | 0.07 | 0.14 | 0.21 | 0.25 |
 | cap|n=64 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | task|length=mean|h=20 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
-| little|d=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|ident=infer|p_id=0.7 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 |
 | cap|n=128 | 0.00 | 0.00 | 0.21 | 0.27 | 0.23 | 0.15 |
 | cap|n=16 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
@@ -314,10 +338,13 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | little|d=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=2.5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|d=5 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|fifo=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|hint=1 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | little|d=5|ident=infer|p_id=0.5 | 0.00 | 0.01 | 0.05 | 0.07 | 0.07 | 0.06 |
 | little|d=5|ident=infer|p_id=0.9 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.05 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| little|df=0.2 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
 | shed|q=4 | 0.00 | 0.01 | 0.07 | 0.13 | 0.21 | 0.25 |
 | shed|q=64 | 0.00 | 0.00 | 0.15 | 0.20 | 0.22 | 0.24 |
 | task|length=mean|h=10 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
@@ -340,7 +367,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 0.00 | 0.02 | 0.15 | 0.30 | 0.41 | 0.48 |
 | cap|n=64 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
 | task|length=mean|h=20 | 0.01 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
-| little|d=5 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
+| little|df=0.1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
 | little|d=5|ident=infer|p_id=0.7 | 0.01 | 0.01 | 0.03 | 0.06 | 0.08 | 0.09 |
 | cap|n=128 | 0.01 | 0.02 | 0.09 | 0.12 | 0.13 | 0.14 |
 | cap|n=16 | 0.00 | 0.00 | 0.00 | 0.02 | 0.02 | 0.01 |
@@ -348,10 +375,13 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | little|d=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
 | little|d=10 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
 | little|d=2.5 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| little|d=5 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
 | little|d=5|fifo=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
 | little|d=5|hint=1 | 0.00 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 |
 | little|d=5|ident=infer|p_id=0.5 | 0.01 | 0.04 | 0.13 | 0.21 | 0.26 | 0.32 |
 | little|d=5|ident=infer|p_id=0.9 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| little|df=0.05 | 0.01 | 0.01 | 0.01 | 0.00 | 0.01 | 0.01 |
+| little|df=0.2 | 0.00 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
 | shed|q=4 | 0.00 | 0.04 | 0.15 | 0.29 | 0.40 | 0.49 |
 | shed|q=64 | 0.00 | 0.02 | 0.38 | 0.46 | 0.48 | 0.52 |
 | task|length=mean|h=10 | 0.00 | 0.01 | 0.00 | 0.01 | 0.00 | 0.01 |
@@ -374,7 +404,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 817.52 | 877.16 | 799.00 | 654.88 | 495.84 | 357.82 |
 | cap|n=64 | 838.49 | 830.99 | 826.59 | 780.17 | 866.32 | 850.79 |
 | task|length=mean|h=20 | 827.30 | 836.81 | 825.34 | 863.53 | 857.82 | 849.08 |
-| little|d=5 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
+| little|df=0.1 | 836.08 | 849.20 | 866.56 | 923.21 | 888.07 | 883.98 |
 | little|d=5|ident=infer|p_id=0.7 | 809.09 | 878.37 | 880.84 | 881.13 | 832.84 | 834.24 |
 | cap|n=128 | 838.49 | 867.22 | 878.99 | 903.33 | 897.26 | 964.50 |
 | cap|n=16 | 802.00 | 860.29 | 824.18 | 814.77 | 804.92 | 809.40 |
@@ -382,10 +412,13 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | little|d=1 | 832.32 | 817.84 | 892.24 | 882.97 | 871.30 | 878.02 |
 | little|d=10 | 817.52 | 871.97 | 871.23 | 833.18 | 875.17 | 858.69 |
 | little|d=2.5 | 817.20 | 828.18 | 851.45 | 860.86 | 857.79 | 899.00 |
+| little|d=5 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
 | little|d=5|fifo=1 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
 | little|d=5|hint=1 | 817.52 | 874.33 | 856.30 | 856.72 | 839.38 | 839.78 |
 | little|d=5|ident=infer|p_id=0.5 | 809.09 | 807.15 | 767.29 | 703.67 | 703.99 | 554.29 |
 | little|d=5|ident=infer|p_id=0.9 | 809.09 | 858.14 | 877.27 | 893.36 | 903.50 | 843.68 |
+| little|df=0.05 | 819.87 | 839.79 | 876.92 | 870.12 | 849.23 | 839.75 |
+| little|df=0.2 | 817.52 | 871.97 | 871.23 | 833.18 | 875.17 | 858.69 |
 | shed|q=4 | 845.06 | 829.79 | 757.16 | 615.27 | 476.11 | 326.33 |
 | shed|q=64 | 817.52 | 934.86 | 813.38 | 732.10 | 617.58 | 436.75 |
 | task|length=mean|h=10 | 797.57 | 802.12 | 810.92 | 877.67 | 837.35 | 860.81 |
@@ -408,7 +441,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 1.00 | 1.00 | 0.91 | 0.80 | 0.68 | 0.55 |
 | cap|n=64 | 1.00 | 0.97 | 0.77 | 0.60 | 0.40 | 0.24 |
 | task|length=mean|h=20 | 1.00 | 0.92 | 0.73 | 0.55 | 0.37 | 0.22 |
-| little|d=5 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
+| little|df=0.1 | 1.00 | 0.98 | 0.77 | 0.58 | 0.38 | 0.24 |
 | little|d=5|ident=infer|p_id=0.7 | 1.00 | 0.96 | 0.77 | 0.56 | 0.39 | 0.23 |
 | cap|n=128 | 1.00 | 1.00 | 0.71 | 0.49 | 0.33 | 0.20 |
 | cap|n=16 | 0.42 | 0.27 | 0.19 | 0.16 | 0.10 | 0.07 |
@@ -416,10 +449,13 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | little|d=1 | 1.00 | 0.95 | 0.75 | 0.57 | 0.38 | 0.23 |
 | little|d=10 | 1.00 | 0.98 | 0.78 | 0.59 | 0.39 | 0.23 |
 | little|d=2.5 | 1.00 | 0.97 | 0.76 | 0.59 | 0.39 | 0.23 |
+| little|d=5 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
 | little|d=5|fifo=1 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
 | little|d=5|hint=1 | 1.00 | 0.97 | 0.78 | 0.58 | 0.39 | 0.23 |
 | little|d=5|ident=infer|p_id=0.5 | 1.00 | 0.96 | 0.80 | 0.63 | 0.46 | 0.30 |
 | little|d=5|ident=infer|p_id=0.9 | 1.00 | 0.97 | 0.76 | 0.58 | 0.37 | 0.24 |
+| little|df=0.05 | 1.00 | 0.95 | 0.76 | 0.58 | 0.40 | 0.24 |
+| little|df=0.2 | 1.00 | 0.98 | 0.78 | 0.59 | 0.39 | 0.23 |
 | shed|q=4 | 1.00 | 0.99 | 0.91 | 0.82 | 0.70 | 0.55 |
 | shed|q=64 | 1.00 | 1.00 | 0.77 | 0.66 | 0.57 | 0.48 |
 | task|length=mean|h=10 | 0.73 | 0.49 | 0.37 | 0.28 | 0.18 | 0.11 |
@@ -442,7 +478,7 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 0.28 | 0.30 | 0.31 | 0.33 | 0.36 | 0.39 |
 | cap|n=64 | 0.22 | 0.20 | 0.18 | 0.17 | 0.17 | 0.18 |
 | task|length=mean|h=20 | 0.20 | 0.19 | 0.19 | 0.17 | 0.18 | 0.20 |
-| little|d=5 | 0.25 | 0.25 | 0.23 | 0.25 | 0.24 | 0.25 |
+| little|df=0.1 | 0.25 | 0.25 | 0.23 | 0.25 | 0.24 | 0.25 |
 | little|d=5|ident=infer|p_id=0.7 | 0.21 | 0.21 | 0.21 | 0.21 | 0.19 | 0.21 |
 
 ## Trace-calibrated goodput, KV capacity 256 tasks (median)
@@ -454,22 +490,22 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | shed|q=16 | 0.58 | 0.89 | 0.91 | 0.81 | 0.70 | 0.61 |
 | cap|n=64 | 0.58 | 0.87 | 0.94 | 0.93 | 0.94 | 0.93 |
 | task|length=mean|h=20 | 0.58 | 0.82 | 0.89 | 0.88 | 0.88 | 0.91 |
-| little|d=5 | 0.58 | 0.90 | 1.06 | 1.07 | 1.04 | 1.04 |
+| little|df=0.1 | 0.58 | 0.89 | 1.01 | 1.04 | 1.04 | 1.06 |
 | little|d=5|ident=infer|p_id=0.7 | 0.58 | 0.89 | 1.03 | 1.00 | 1.01 | 0.99 |
 
-## Goodput relative to the best policy per regime, 18 regimes, trace-calibrated tasks (parameters chosen on seeds 0-4, evaluated on 5-9) (parameters chosen on seeds 0-4, evaluation on seeds 5-9)
+## Goodput relative to the best policy per regime, 18 regimes, trace-calibrated tasks (parameters chosen on seeds 0-4, evaluation on seeds 5-9)
 
 | policy | median | 10th pct | worst | regimes within 0.9 of best |
 |:---|:---:|:---:|:---:|:---:|
 | no admission control | 0.32 | 0.12 | 0.08 | 0% |
-| serve by progress | 0.28 | 0.11 | 0.08 | 0% |
+| serve by progress | 0.28 | 0.10 | 0.08 | 0% |
 | shed (tuned per regime) | 0.78 | 0.63 | 0.63 | 28% |
-| shed (one value for all regimes) | 0.74 | 0.61 | 0.59 | 28% |
-| cap (tuned per regime) | 0.93 | 0.69 | 0.61 | 61% |
-| cap (one value for all regimes) | 0.86 | 0.49 | 0.44 | 44% |
-| task work budget (tuned per regime) | 0.95 | 0.74 | 0.64 | 67% |
-| task work budget (one value for all regimes) | 0.93 | 0.46 | 0.37 | 56% |
-| Little's-law cap (D=5, never tuned) | 0.96 | 0.61 | 0.12 | 61% |
+| shed (one value for all regimes) | 0.74 | 0.59 | 0.59 | 28% |
+| cap (tuned per regime) | 0.92 | 0.69 | 0.61 | 56% |
+| cap (one value for all regimes) | 0.86 | 0.49 | 0.44 | 39% |
+| task work budget (tuned per regime) | 0.94 | 0.74 | 0.64 | 67% |
+| task work budget (one value for all regimes) | 0.92 | 0.46 | 0.37 | 56% |
+| Little's-law cap (D = 0.1 x timeout, never tuned) | 0.96 | 0.62 | 0.60 | 67% |
 
 - best shed value per regime: 64: 8, 16: 5, 4: 5
 
@@ -489,14 +525,10 @@ KV-bound regimes (kv_tasks=16) cap every policy; ratios are relative to the best
 | 3 | 0.25 | 0.26 | 0.08 |
 | 8 | 0.01 | 0.00 | 0.00 |
 
-## Retry sensitivity, little|d=5, load 2.4: goodput by retry budget (rows) and backoff base (cols)
+## Retry sensitivity, little|df=0.1, load 2.4: goodput by retry budget (rows) and backoff base (cols)
 
-| retries | 0.5 | 2.0 | 8.0 |
-|:---|:---:|:---:|:---:|
-| 0 | 1.01 | 1.01 | 1.01 |
-| 1 | 1.01 | 1.02 | 1.01 |
-| 3 | 1.01 | 1.03 | 1.08 |
-| 8 | 1.21 | 1.35 | 1.35 |
+| retries |
+|:---|
 
 ## Closed-network wait: measured vs. fluid prediction N s/C - s - tau
 

@@ -18,40 +18,40 @@
 \begin{abstract}
 Autonomous agents turn one user task into a chain of dependent LLM calls separated by tool calls,
 and they retry automatically when a call times out. When offered load exceeds capacity, a server that admits work
-per \emph{request} wastes most of its time on steps of tasks that will never finish: in our simulation, goodput falls to
-0.26 of capacity at 2.4$\times$ overload with no admission control and to 0.53 with per-request load shedding, and 75\% of the
-server's time is wasted. Admitting per \emph{task} avoids this. We give a closed-population
-fluid result: with $N$ admitted tasks, $C$ slots, step time $s$ and tool time $\tau$, the queueing wait is
-$\max(0,Ns/C-s-\tau)$, so capping $N$ at $C(s+\tau+D)/s$ holds the wait at a target $D$ whatever the offered load, which
-avoids timeouts and retries by construction, using only online estimates of $s$ and $\tau$ and no length information. In simulation this cap
-keeps goodput at 1.02--1.03 of capacity from 1.2$\times$ to 4$\times$ overload with no task lost mid-way, is insensitive to its single
-parameter ($D$ from 1 to 10\,s), and matches a per-regime-tuned cap in 85\% of 81 workload regimes without tuning. The regimes where it loses are KV-memory-bound
-with long tool calls. Length-aware admission looks attractive (up to 2.3$\times$ more tasks completed) but starves long tasks
-completely (0\% of long tasks complete at 4$\times$ load). All results are simulations of one server.
+per \emph{request} spends most of its time on steps of tasks that never finish: with task lengths and tool times resampled from real
+coding-agent sessions, goodput at 2.4$\times$ overload is 0.21 of capacity with no admission control and 0.61 with per-request load shedding,
+and 81\% (no control) and 41\% (shedding) of server time is wasted. Admitting per \emph{task}, the idea of session-based admission control for web servers,
+avoids this. For agents we add a closed-population fluid result: with $N$ admitted tasks, $C$ slots, step time $s$ and tool time $\tau$, the queueing wait is
+$\max(0,Ns/C-s-\tau)$, so capping $N$ at $C(s+\tau+D)/s$ holds the wait at a target $D$ whatever the offered load, using only online estimates of $s$ and $\tau$ and no length
+information. With $D$ set to a tenth of the client timeout, this cap holds 0.92--0.94 of capacity from 1.2$\times$ to 4$\times$ overload on trace-calibrated tasks (1.01--1.04 on synthetic ones)
+with no task lost mid-way, and without per-regime tuning it is within 0.9 of the best policy in 67\% of 18 trace-calibrated and 85\% of 81 synthetic regimes. It is weak when KV memory is the binding constraint,
+where per-request shedding can win. Length-aware admission completes up to 2.3$\times$ more tasks but starves long ones (0\% of long tasks complete at 4$\times$ load).
+All results are simulations of one server.
 \end{abstract}
 
 \section{Introduction}
 Agentic workloads differ from chat in two ways that matter under overload. A task is a chain of LLM calls whose
-prompts grow, so abandoning a task midway throws away all the work already done on it, and the KV state of a task must be
+prompts grow, so abandoning a task midway throws away all the work already done on it, and its KV state must be
 kept or rebuilt between calls. And clients retry on timeout without a human to stop them, so an overloaded server sees more
-work exactly when it is slowest, the retry feedback loop behind metastable failures~\citep{bronson2021metastable,huang2022metastable}.
-Existing agent-serving systems schedule and cache around tool calls, for example by pinning KV state for a time-to-live
-and serving requests of the same program first~\citep{continuum2025,tokencake2025,saga2026,cachewise2026}. They do not study
-what to \emph{admit} when load exceeds capacity.
+work exactly when it is slowest, the feedback loop behind metastable failures~\citep{bronson2021metastable,huang2022metastable}.
+Agent-serving systems schedule and cache around tool calls, for example by pinning KV state for a time-to-live, prioritising program
+progress, or routing by session~\citep{continuum2025,tokencake2025,saga2026,cachewise2026,smetric2026,talaria2026}; admission under overload is
+only proposed in open issues of serving projects (e.g.\ session-level admission control in llm-d) and, for web servers, was studied as session-based admission control~\citep{cherkasova2002sbac}.
 
-We ask: \emph{when agents run multi-step tasks and retry automatically, can admitting work per task instead of per request keep a server stable and productive as offered load grows far beyond capacity, and what rule achieves this without tuning?}
-Our contributions:
+We ask: \emph{when agents run multi-step tasks and retry automatically, how much does admitting per task instead of per request help as offered load grows past capacity, what rule achieves it without tuning, and when does it fail?}
+Contributions:
 \begin{enumerate}
-\item \textbf{A model and a failure.} An agent-overload simulator (multi-step tasks, tool calls, KV eviction, timeouts, retries, task identification and length-knowledge levels). Without task-level admission goodput collapses and most server time is wasted on abandoned work (\cref{sec:overload}).
-\item \textbf{A closed-population result and a tuning-light rule.} Little's law on the cycle of a task gives the wait $\max(0,Ns/C-s-\tau)$, hence a cap on admitted tasks that fixes the queueing wait at a target (\cref{sec:theory}). Safety depends only on counting tasks, not on length predictions.
-\item \textbf{Evidence on robustness and limits.} The rule is insensitive to its parameter, tolerates inferring task identity from 70\% of steps, and matches tuned alternatives in 85\% of 81 regimes; length information improves task counts but starves long tasks; and the rule is conservative when KV memory binds (\cref{sec:eval}).
+\item \textbf{A model and a failure.} An agent-overload simulator (multi-step tasks, tool calls, KV eviction, timeouts, retries, task identification and length-knowledge levels), run both with synthetic distributions and with task lengths and tool times resampled from real coding-agent sessions~\citep{tracelab2026}. Without task-level admission goodput collapses and most server time is wasted (\cref{sec:overload}).
+\item \textbf{A closed-population result and a tuning-light rule.} Little's law on the cycle of a task gives the wait $\max(0,Ns/C-s-\tau)$, hence a cap on admitted tasks that fixes the wait at a target (\cref{sec:theory}). Its safety depends on counting tasks, not on length predictions.
+\item \textbf{Evidence on robustness, and on limits.} The rule is insensitive to its parameter once expressed relative to the client timeout, matches tuned alternatives in most regimes, and shows two costs of the alternatives: length-aware admission starves long tasks and, on real heavy-tailed lengths, wastes capacity; and the rule is conservative when KV memory binds (\cref{sec:eval}).
 \end{enumerate}
+We do not claim that delay-targeted concurrency limits~\citep{welsh2001seda,zhou2018dagor,cho2020breakwater,netflixconcurrency} or session admission~\citep{cherkasova2002sbac} are new; the contribution is their analysis and evaluation for agentic LLM workloads.
 
 \section{Model}
-\paragraph{Server.} $C$ parallel slots (a batching engine abstracted to $C$ concurrent steps), step time lognormal with mean $s$ (2\,s, CV 0.5). KV memory holds $K$ tasks; the least recently used task not in service is evicted when full, and a step whose KV was evicted pays an extra $0.25\cdot(\text{steps done})\cdot s$ to rebuild it.
-\paragraph{Tasks.} Tasks arrive as a Poisson process; length $L\sim 1+\text{Geom}$ with mean 6 steps; after each step the agent runs a tool for an exponential time of mean $\tau{=}3$\,s, then submits the next step. \emph{Load} is the arrival rate over the no-failure task capacity $C/(s\,\mathbb{E}L)$.
+\paragraph{Server.} $C{=}16$ parallel slots (a batching engine abstracted to $C$ concurrent steps), step time lognormal with mean $s{=}2$\,s (CV 0.5). KV memory holds $K$ tasks (default 64); the least recently used task not in service is evicted when full, and a step whose KV was evicted pays an extra $0.25\cdot(\text{steps done})\cdot s$ to rebuild it.
+\paragraph{Tasks.} Tasks arrive as a Poisson process. In \emph{synthetic} runs a task has $1+\text{Geom}$ steps with mean 6 and tool times are exponential with mean 3\,s. In \emph{trace-calibrated} runs, task lengths (rounds per turn, clipped to 100; mean 9.0) and tool times (wall latency of tool calls, clipped to 300\,s; mean 6.9\,s, median 0.2\,s) are resampled from the public TraceLab dataset of Claude Code and Codex sessions (32{,}341 turns, 743{,}050 tool calls)~\citep{tracelab2026}, which is very heavy-tailed. \emph{Load} is the task arrival rate over the no-failure task capacity $C/(s\,\mathbb{E}L)$.
 \paragraph{Clients.} A step times out after $\theta{=}30$\,s; if still queued it is cancelled, if in service it completes and is wasted. The client retries with exponential backoff (base 2\,s, jitter) at most 3 times, then the task is lost with all its work. Goodput is completed steps over step capacity; we also report tasks lost mid-way and wasted server time.
-\paragraph{Policies.} \emph{none}: admit everything, FIFO. \emph{prog}: serve requests of tasks with more progress first (program-level FCFS). \emph{shed}: reject a step when the queue exceeds $Q$. \emph{cap}: admit a new task while fewer than $N$ are admitted. \emph{work budget}: admit a new task if the estimated remaining work of all admitted tasks plus the new one fits in $H$ seconds of capacity, with the task's length known exactly (\emph{oracle}), noisily (\emph{pred}), or replaced by the mean. \emph{Little's-law cap}: below.
+\paragraph{Policies.} \emph{none}: admit everything, FIFO. \emph{prog}: serve requests of tasks with more progress first (program-level FCFS). \emph{shed}: reject a step when the queue exceeds $Q$. \emph{cap}: admit a new task while fewer than $N$ are admitted. \emph{work budget}: admit a new task if the estimated remaining work of all admitted tasks plus the new one fits in $H$ seconds of capacity, with the task's length known exactly (\emph{oracle}), noisily (\emph{pred}), or replaced by the mean. \emph{Little's-law cap}: below. Task-level policies must identify which task a step belongs to; we model a tag (always recognised) and inference that recognises a step with probability $p$ (otherwise the step is treated as a new task and can be refused mid-task).
 
 \section{A Closed-Population Result}\label{sec:theory}
 Admitted tasks form a closed population: each alternates between a tool phase (no server) and a step (queue plus service).
@@ -61,7 +61,7 @@ Let $N$ tasks cycle through a tool phase of mean $\tau$ and a step of mean servi
 \begin{proof}[Sketch]
 Little's law on the cycle gives $N=X\,(s+\tau+W)$. If the slots are not saturated, $W=0$ and $X=N/(s+\tau)$. Otherwise $X=C/s$ and solving for $W$ gives the stated value.
 \end{proof}
-\textbf{Rule.} Admit a new task only while $N<C\,(\hat s+\hat\tau+D)/\hat s$, where $\hat s$ is the measured mean step time (including KV rebuilds and steps whose client gave up, which the server still runs) and $\hat\tau$ the measured gap between a task's step finishing and its next step arriving, and never beyond the KV capacity $K$. Then $W=D$ when the server is saturated, independently of the offered load. If $D$ plus the service tail is below the timeout $\theta$, steps rarely time out: no retries, no wasted work, and admitted tasks complete. Estimation errors in task \emph{lengths} do not affect this safety property, because the rule counts tasks and uses no length; length estimates only change which tasks are admitted.
+\textbf{Rule.} Admit a new task only while $N<C\,(\hat s+\hat\tau+D)/\hat s$, where $\hat s$ is the measured mean step time (including KV rebuilds, and including steps whose client gave up, which the server still runs; measuring only completed steps biases $\hat s$ low under overload and inflates the cap), $\hat\tau$ is the measured gap between a task's step finishing and its next step arriving, and $N$ never exceeds the KV capacity $K$. Then $W=D$ when the server is saturated, independently of the offered load. If $D$ plus the variability of waits stays below the timeout $\theta$, steps rarely time out: no retries, no wasted work, and admitted tasks complete. We therefore set $D=0.1\,\theta$; a fixed $D{=}5$\,s works for $\theta{=}30$\,s but fails for $\theta{=}15$\,s on heavy-tailed trace tasks (73\% of tasks lost in one regime), because the wait distribution then crosses the timeout. Estimation errors in task \emph{lengths} do not affect safety, because the rule counts tasks and uses no length; lengths only change which tasks are admitted.
 
 \Cref{fig:fluid} checks \cref{prop:wait} in the simulator with no KV pressure and no timeouts (15 of 18 cells within 0.4\,s; the two largest deviations, 1.7 and 1.0\,s, are at the saturation knee with 10\,s tool calls, where variability matters).
 \begin{figure}[t]\centering
@@ -71,50 +71,69 @@ Little's law on the cycle gives $N=X\,(s+\tau+W)$. If the slots are not saturate
 \end{figure}
 
 \section{Evaluation}\label{sec:eval}
-Defaults: $C{=}16$, $K{=}64$, 10 seeds, median and interquartile range. Task capacity is 1.33 tasks/s. Everything is simulated; \cref{sec:limits} lists what that means.
+10 seeds, median and interquartile range. Task capacity is 1.33 tasks/s (synthetic) and 0.89 tasks/s (trace-calibrated). Everything is simulated; \cref{sec:limits} lists what that means. Unless noted, ``Little's-law cap'' uses $D=0.1\,\theta$.
 
 \subsection{Overload}\label{sec:overload}
 \begin{figure*}[t]\centering
-  \includegraphics[width=\textwidth]{figA1_overload.png}
-  \caption{Goodput, tasks lost mid-way and wasted server time against offered load.}
+  \includegraphics[width=\textwidth]{figA7_trace_overload.png}
+  \caption{Trace-calibrated tasks, $K{=}64$: goodput, tasks lost mid-way and wasted server time against offered load.}
   \label{fig:overload}
 \end{figure*}
-\Cref{fig:overload} shows the failure. Without admission control, goodput falls from 0.87 at 0.9$\times$ to 0.37 at 1.2$\times$ and 0.26 at 2.4$\times$; 87\% of tasks are lost mid-way and 75\% of server time is wasted. Serving by progress helps at mild overload (1.01 at 1.2$\times$) but collapses at 2.4$\times$ (0.16): the oldest tasks are served first, but the queue still outgrows the timeout. Per-request shedding with $Q{=}16$ keeps 0.53 at 2.4$\times$ but still loses 38\% of tasks mid-way, because it rejects steps of tasks it already accepted. A task cap ($N{=}64$), the work budget ($H{=}20$\,s) and the Little's-law cap all hold 1.00--1.03 of capacity from 1.2$\times$ to 4$\times$ with no task lost mid-way and under 1\% of server time wasted. The price is rejecting new tasks: at 4$\times$ only 25\% of arriving tasks complete, the rest being refused at the door instead of after wasted work. Completed tasks have a P99 latency of 214\,s (vs.\ 312\,s with no control).
+\Cref{fig:overload} uses task lengths and tool times from real agent sessions. Without admission control goodput falls from 0.88 at 0.9$\times$ to 0.41 at 1.2$\times$ and 0.21 at 2.4$\times$; 71\% of tasks are lost mid-way and 81\% of server time is wasted. Serving by progress is worse at high load (0.18 at 2.4$\times$). Per-request shedding ($Q{=}16$) keeps 0.61 at 2.4$\times$ and 0.57 at 4$\times$ but still loses 21--25\% of tasks mid-way and wastes 41--48\% of server time, because it refuses steps of tasks it already accepted. A task cap ($N{=}64$) and the Little's-law cap hold 0.92--0.94 from 1.2$\times$ to 4$\times$ with no task lost and about 1\% of server time wasted; the work budget ($H{=}20$\,s) holds 0.87--0.89. The price is refusing new tasks at the door: at 4$\times$ only 24\% of arriving tasks complete (against 4\% with no control and 55\% with shedding, which completes more tasks but wastes work).
+With synthetic (geometric, exponential) tasks the picture is the same with sharper numbers: no control 0.26 and shedding 0.53 at 2.4$\times$, task-level policies 1.00--1.04, and no task lost mid-way (\cref{fig:sens} shows the full parameter ranges).
 
-\subsection{Tuning}
+\subsection{Tuning and regimes}
 \begin{figure}[t]\centering
   \includegraphics[width=\columnwidth]{figA2_sensitivity.png}
-  \caption{Goodput at 2.4$\times$ overload against each rule's tuning parameter.}
+  \caption{Synthetic tasks, goodput at 2.4$\times$ overload against each rule's tuning parameter.}
   \label{fig:sens}
 \end{figure}
-\Cref{fig:sens} shows sensitivity at 2.4$\times$ overload. Per-request shedding never exceeds 0.57. A task cap is good only for $N$ near 64 (0.45 at 16, 0.89 at 32, 0.90 at 128). The work budget is good for $H\in[20,40]$\,s. The Little's-law cap holds 1.02--1.03 for every $D$ from 1 to 10\,s.
-\Cref{fig:regimes} sweeps 81 regimes at 2.4$\times$ overload (mean task length 3/6/12, tool time 1/3/10\,s, timeout 15/30/60\,s, KV capacity 16/64/256 tasks). We choose each fixed parameter on seeds 0--4 and evaluate on seeds 5--9, scoring goodput against the best policy in each regime. The best $N$ for the task cap is 64 in 29 regimes, 32 in 23, 128 in 16 and 16 in 13; no single value is safe: one fixed $N$ has a 10th percentile of 0.62 of the best. The Little's-law cap with $D{=}5$ and no tuning has median 0.99 and is within 0.9 of the best in 85\% of regimes, against 91\% for a cap tuned per regime and 65\% for one fixed cap. Per-request shedding reaches 0.68 of the best at the median and no admission control 0.15.
+\Cref{fig:sens} shows sensitivity at 2.4$\times$ (synthetic, $\theta{=}30$\,s). Per-request shedding never exceeds 0.57. A task cap is good only for $N$ near 64 (0.45 at 16, 0.89 at 32, 0.90 at 128). The work budget is good for $H\in[20,40]$\,s. The Little's-law cap holds 1.02--1.03 for every $D$ from 1 to 10\,s and for $D/\theta$ from 0.05 to 0.2.
 \begin{figure}[t]\centering
   \includegraphics[width=\columnwidth]{figA4_regimes.png}
-  \caption{Goodput relative to the best policy per regime across 81 regimes.}
+  \caption{Synthetic tasks: goodput relative to the best policy per regime across 81 regimes.}
   \label{fig:regimes}
 \end{figure}
-The Little's-law cap's weak regimes are KV-bound: its 10th percentile is 0.58 and its worst case 0.35, all 12 such regimes have a KV capacity of 16 tasks, where a cap that admits more tasks than fit in KV and accepts rebuild costs does better. We tried admitting up to 2$\times$ or 4$\times$ the KV capacity and it was worse overall.
+\Cref{fig:regimes} sweeps 81 synthetic regimes at 2.4$\times$ overload (mean length 3/6/12, tool time 1/3/10\,s, timeout 15/30/60\,s, KV 16/64/256 tasks), and the trace-calibrated version sweeps 18 (timeout 15/30/60\,s, KV 16/64/256, load 1.6 and 3$\times$). Fixed parameters are chosen on seeds 0--4 and evaluated on seeds 5--9 against the best policy in each regime.
+\begin{table}[t]\centering\small
+\caption{Goodput relative to the best policy in the regime (median / 10th percentile / worst; share of regimes within 0.9).}
+\label{tab:regimes}
+\footnotesize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{lcc}
+\toprule
+ & synthetic (81) & trace-calibrated (18)\\
+\midrule
+no admission control & .15 / .07 / .04; 0\% & .32 / .12 / .08; 0\%\\
+shed, tuned per regime & .68 / .57 / .47; 11\% & .78 / .63 / .63; 28\%\\
+task cap, tuned per regime & .99 / .91 / .75; 91\% & .92 / .69 / .61; 56\%\\
+task cap, one value & .93 / .62 / .41; 65\% & .86 / .49 / .44; 39\%\\
+work budget, tuned & .99 / .88 / .56; 85\% & .94 / .74 / .64; 67\%\\
+Little's-law cap, never tuned & .99 / .58 / .35; 85\% & .96 / .62 / .60; 67\%\\
+\bottomrule
+\end{tabular}
+\end{table}
+\Cref{tab:regimes} summarises. Without tuning, the Little's-law cap matches tuned alternatives at the median and is within 0.9 of the best in 85\% (synthetic) and 67\% (trace) of regimes, whereas the best task cap $N$ varies across regimes (64 in 29, 32 in 23, 128 in 16, 16 in 13) and a single fixed $N$ is far worse (10th percentile 0.62 and 0.49). Its weak regimes are all KV-bound: all 12 synthetic regimes where it falls below 0.85 of the best have a KV capacity of 16 tasks. With real trace tasks and a 16-task KV, per-request shedding is better than every task-level policy (0.36--0.39 against 0.25 for the Little's-law cap at 2.4--4$\times$): when KV memory binds, refusing individual steps keeps more state resident than admitting whole tasks. We tried admitting up to 2$\times$ or 4$\times$ the KV capacity and it was worse overall.
 
 \subsection{What task information is worth}
 \begin{figure}[t]\centering
   \includegraphics[width=\columnwidth]{figA5_information.png}
-  \caption{Work goodput and long-task completion for different knowledge of task length.}
+  \caption{Synthetic tasks: work goodput and long-task completion for different knowledge of task length.}
   \label{fig:info}
 \end{figure}
-Knowing task lengths seems useful: with exact lengths the work budget completes 2.28$\times$ the task capacity in tasks at 4$\times$ load (noisy lengths, $\sigma{=}0.5$: 2.12$\times$), because it admits short tasks. But work goodput is the same (1.02--1.03), and long tasks (more than twice the mean) are starved: only 0\% (exact) and 3\% (noisy) complete, against 24\% for the length-free cap (\cref{fig:info}). Length information therefore buys a count of completed tasks, not capacity, at the cost of fairness. Identity matters less than expected: recognising 70\% of steps (the rest treated as new tasks, so sometimes refused mid-task) loses 2\% of goodput at 4$\times$; recognising 50\% loses 12\%.
+Knowing task lengths seems useful: with exact lengths the work budget completes 2.28$\times$ the task capacity in tasks at 4$\times$ load (noisy, $\sigma{=}0.5$: 2.12$\times$), because it admits short tasks. But work goodput is unchanged (1.01--1.03), and long tasks (more than twice the mean) are starved: 0\% (exact) and 3\% (noisy) complete, against 25\% for the length-free cap (\cref{fig:info}). Length information buys a count of completed tasks, not capacity, at the cost of fairness. On real heavy-tailed lengths it also costs capacity: length-aware admission refuses long tasks even at low load, giving work goodput of only 0.26--0.84 (exact lengths) and 0.29--0.91 (noisy), against 0.58--0.94 for the length-free caps from 0.6$\times$ to 4$\times$.
+Task identity matters more with real tasks: recognising 70\% of steps loses 2\% of goodput at 4$\times$ on synthetic tasks but 15\% on trace-calibrated ones (0.79 against 0.93), since heavy-tailed tasks have more steps that can be refused mid-task.
 
 \subsection{Surges and retries}
-After a 60\,s surge of 3$\times$ and 5$\times$ base load, only the unprotected server stays degraded: 55\% and 60\% of later tasks complete, against 100\% for the default setting of each protected policy (serving by progress: 94\% after a 5$\times$ surge; a badly tuned queue limit $Q{=}64$ or cap $N{=}16$: 75\% and 55\%). In our model, per-request shedding with a tight queue limit also recovers, so the surge test separates only unprotected servers from protected ones. A retry sweep (0, 1, 3 or 8 retries, backoff 0.5, 2 or 8\,s) is in the artifact summary.
+After a 60\,s surge of 3$\times$ and 5$\times$ a base load of 0.8, only the unprotected server stays degraded (55\% and 60\% of later tasks complete), against 100\% for the default setting of each protected policy (serving by progress: 94\% after a 5$\times$ surge; a badly tuned queue limit $Q{=}64$ or cap $N{=}16$: 75\% and 55\%). Per-request shedding with a tight limit also recovers in our model, so this test separates only unprotected from protected servers. A retry sweep is in the artifact summary.
 
 \section{Related Work}
-Overload control for services is a mature area: SEDA bounds queues per stage~\citep{welsh2001seda}, DAGOR sheds load by priority using queueing time~\citep{zhou2018dagor}, and Breakwater uses server-issued credits driven by queueing delay~\citep{cho2020breakwater}. Metastable failures from retry amplification are documented in production~\citep{bronson2021metastable,huang2022metastable}. Our rule is in this family, a delay-targeted concurrency limit; what is specific here is the unit (a multi-step task whose abandonment wastes accumulated work), the closed-population formula that accounts for tool time, and the KV-memory bound. Agent-serving systems reduce latency by pinning or prefetching KV state and prioritising program progress~\citep{continuum2025,tokencake2025,saga2026,cachewise2026}; they target throughput and completion time, not admission under overload, and \emph{prog} in our evaluation is a minimal version of their scheduling idea.
+Overload control for services is a mature area: SEDA bounds queues per stage~\citep{welsh2001seda}, DAGOR sheds load by priority from queueing time~\citep{zhou2018dagor}, Breakwater issues server credits driven by queueing delay~\citep{cho2020breakwater}, and Netflix's concurrency-limits library adapts a limit with Vegas- and gradient-style rules~\citep{netflixconcurrency}. Session-based admission control, which refuses new web sessions to avoid aborting long ones, addresses the same waste for e-commerce~\citep{cherkasova2002sbac}. Metastable failures from retry amplification are documented in production~\citep{bronson2021metastable,huang2022metastable}. Our rule is in this family; what is specific here is the closed-population formula that accounts for tool time and measures service time on abandoned work, the KV bound, the length-information analysis, and the evaluation on real agent task distributions. Agent-serving systems reduce latency by pinning or prefetching KV state, prioritising program progress and routing by session~\citep{continuum2025,tokencake2025,saga2026,cachewise2026,smetric2026,talaria2026}; they target throughput and completion time, not refusing work under overload, and \emph{prog} in our evaluation is a minimal version of their scheduling idea. TraceLab characterises coding-agent workloads and provides the distributions we resample~\citep{tracelab2026}.
 
 \section{Limitations}\label{sec:limits}
-All results come from one simulated server; there is no real GPU, batching or decode model, and no real agent trace (we found no public one with task boundaries, so arrivals are Poisson and tool times exponential). Parameters are plausible, not measured. We do not model priorities, deadlines or multiple replicas; with many routers the admission state would itself be shared stale state, the herding setting of the companion paper. The Little's-law cap needs task identity to count tasks and to measure $\tau$, and it is conservative when KV memory binds. The recovery experiment does not separate good protected policies.
+All results come from one simulated server: no real GPU, batching or decode model. Task lengths and tool times in the trace-calibrated runs are resampled independently from coding-agent sessions, which loses correlations (e.g.\ between a task's steps), and the empirical lengths are clipped at 100 steps and 300\,s tool calls; other agent types (web, customer-service) may differ. Arrivals are Poisson. We do not model priorities, deadlines or multiple replicas; with many routers the admission state would itself be shared, stale state, the setting of a companion study on herding. The Little's-law cap needs task identity to count tasks and measure $\tau$, assumes the client timeout is known, and is conservative when KV memory binds, where shedding can be better. The parameter $D/\theta=0.1$ was chosen after a failure with a fixed $D$ and is validated on the same simulator, not an independent system. The recovery experiment does not separate good protected policies. There is no real-system measurement yet.
 
 \section{Conclusion}
-Under overload, agents make admission a per-task decision: a refused task costs nothing, an abandoned one wastes everything. Counting admitted tasks against a Little's-law cap holds the queueing wait at a chosen target, keeps goodput near capacity, and needs neither length prediction nor careful tuning, but it relies on knowing which request belongs to which task and on KV memory not being the binding constraint.
+Under overload, agents make admission a per-task decision: a refused task costs nothing, an abandoned one wastes everything. Counting admitted tasks against a Little's-law cap holds the queueing wait at a fraction of the client timeout, keeps goodput near capacity on synthetic and real task distributions, and needs neither length prediction nor per-regime tuning, but it relies on knowing which request belongs to which task and on KV memory not being the binding constraint.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}

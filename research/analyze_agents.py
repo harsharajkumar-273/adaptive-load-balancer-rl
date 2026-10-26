@@ -30,7 +30,7 @@ HEAD = {  # policy -> (label, color, linestyle, marker)
     "shed|q=16": ("per-request shedding (Q=16)", "#eb6834", "--", "v"),
     "cap|n=64": ("task cap (N=64)", "#4a3aa7", "--", "^"),
     "task|length=mean|h=20": ("task work budget (H=20 s)", "#2a78d6", "-", "D"),
-    "little|d=5": ("Little's-law cap (D=5 s)", "#008300", "-", "o"),
+    "little|df=0.1": ("Little's-law cap (D = 0.1 x timeout)", "#008300", "-", "o"),
     "little|d=5|ident=infer|p_id=0.7": ("Little's-law cap, task inferred (70%)", "#008300", ":", "x"),
 }
 
@@ -96,7 +96,7 @@ def overload_figure(df: pd.DataFrame, out: List[str], fname: str = "figA1_overlo
 
 SENSITIVITY = [("shed|q=", [4, 16, 64], "per-request queue limit Q"), ("cap|n=", [16, 32, 64, 128], "task cap N"),
                ("task|length=mean|h=", [5, 10, 20, 40, 80], "work budget H (s)"),
-               ("little|d=", [1, 2.5, 5, 10], "wait target D (s)")]
+               ("little|d=", [1, 2.5, 5, 10], "wait target D (s)"), ("little|df=", [0.05, 0.1, 0.2], "D / timeout")]
 
 
 def _param_policy(prefix, v):
@@ -105,7 +105,7 @@ def _param_policy(prefix, v):
 
 def sensitivity_figure(df: pd.DataFrame, out: List[str], load: float = 2.4) -> None:
     d = df[df.load == load]
-    fig, axes = plt.subplots(1, 4, figsize=(15.0, 3.6), sharey=True)
+    fig, axes = plt.subplots(1, 5, figsize=(17.0, 3.6), sharey=True)
     rows = []
     for ax, (prefix, values, xlabel) in zip(axes, SENSITIVITY):
         meds, los, his = [], [], []
@@ -128,7 +128,7 @@ def sensitivity_figure(df: pd.DataFrame, out: List[str], load: float = 2.4) -> N
 
 
 def surge_figure(df: pd.DataFrame, out: List[str]) -> None:
-    pols = ["none", "prog", "shed|q=16", "cap|n=64", "task|length=mean|h=20", "little|d=5"]
+    pols = ["none", "prog", "shed|q=16", "cap|n=64", "task|length=mean|h=20", "little|df=0.1"]
     factors = sorted(df.surge_factor.unique())
     fig, ax = plt.subplots(figsize=(8.4, 3.8))
     w = 0.8 / len(factors)
@@ -169,7 +169,7 @@ def regime_figure(df: pd.DataFrame, out: List[str], keys=None, fname: str = "fig
         # one value for all regimes: the member that is best on average (tuned once)
         once = sel[members].div(sel.max(axis=1), axis=0).mean().idxmax()
         cols[f"{name} (one value for all regimes)"] = frac[once]
-    cols["Little's-law cap (D=5, never tuned)"] = frac["little|d=5"]
+    cols["Little's-law cap (D = 0.1 x timeout, never tuned)"] = frac["little|df=0.1"]
     fig, ax = plt.subplots(figsize=(8.6, 4.6))
     palette = {"no admission control": "#e34948", "serve by progress": "#eda100"}
     for name, series in cols.items():
@@ -197,7 +197,7 @@ def regime_figure(df: pd.DataFrame, out: List[str], keys=None, fname: str = "fig
 
 
 def information_figure(df: pd.DataFrame, out: List[str]) -> None:
-    pols = [("little|d=5", "Little cap\n(no length)"), ("task|length=mean|h=20", "work budget\n(mean length)"),
+    pols = [("little|df=0.1", "Little cap\n(no length)"), ("task|length=mean|h=20", "work budget\n(mean length)"),
             ("task|length=pred|sigma=0.5|h=20", "work budget\n(noisy length)"),
             ("task|length=oracle|h=20", "work budget\n(true length)")]
     fig, axes = plt.subplots(1, 2, figsize=(9.4, 3.6))
@@ -223,7 +223,7 @@ def information_figure(df: pd.DataFrame, out: List[str]) -> None:
 
 def retries_table(df: pd.DataFrame, out: List[str]) -> None:
     d = df[df.load == 2.4]
-    for pol in ("none", "little|d=5"):
+    for pol in ("none", "little|df=0.1"):
         t = d[d.policy == pol].groupby(["retries", "backoff"]).goodput_norm.median().unstack()
         t.index.name = "retries"
         out += [f"## Retry sensitivity, {pol}, load 2.4: goodput by retry budget (rows) and backoff base (cols)\n", _md(t), ""]
