@@ -94,6 +94,25 @@ def grid(seeds: int) -> List[Config]:
     return configs
 
 
+FOCUS_STRATEGIES = ["least_conn", "greedy_learned", "p2c_learned", "p3c_learned", "sed", "p2c"]
+FOCUS_PROBING = ["prequal", "p3c_learned_probe", "sed3_probe"]
+
+
+def focus_grid(seeds: int) -> List[Config]:
+    """The cells the paper's claims rest on: 16 gateways, steady and gray, 0.5 s and 2 s refresh (50 and 200 ms in
+    simulator time), synchronised and not, plus the probing comparison. Seed-major, so a first full pass finishes first."""
+    configs = []
+    for seed in range(seeds):
+        for scen in SCENARIOS:
+            for strategy in FOCUS_STRATEGIES:
+                for refresh in (0.05 * TIME_SCALE, 0.2 * TIME_SCALE):
+                    for aligned in (True, False):
+                        configs.append((scen, strategy, refresh, aligned, 16, seed))
+            for strategy in FOCUS_PROBING:
+                configs.append((scen, strategy, 0.0, False, 16, seed))
+    return configs
+
+
 class Lane:
     """
     An isolated experiment slot: its own Redis database, port ranges and CPU
@@ -312,6 +331,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--quick", action="store_true", help="a few short runs to check the setup")
     parser.add_argument("--seeds", type=int, default=3)
+    parser.add_argument("--focus", action="store_true", help="only the key cells (16 gateways) instead of the full grid")
     parser.add_argument("--lanes", type=int, default=2, help="isolated experiments run in parallel")
     parser.add_argument("--duration", type=float, default=90.0, help="measured seconds per run")
     parser.add_argument("--warmup", type=float, default=15.0)
@@ -335,7 +355,7 @@ def main():
                    ("gray", "p3c_learned_probe", 0.0, False, 64, 0), ("steady", "least_conn", 0.0, False, 64, 0)]
         args.duration, args.warmup = 30.0, 6.0
     else:
-        configs = grid(args.seeds)
+        configs = focus_grid(args.seeds) if args.focus else grid(args.seeds)
     done = _done(out)
     todo = [c for c in configs if c not in done]
     print(f"{len(configs)} configurations, {len(done)} already done, {len(todo)} to run "
