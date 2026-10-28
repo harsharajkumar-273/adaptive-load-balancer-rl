@@ -1,10 +1,19 @@
 # Running the real-system grid yourself
 
+**Short on time? Run the focused grid** (the cells the paper's claims rest on: 16 gateways, steady and gray,
+0.5 s and 2 s refresh, synchronised or not, plus the probing comparison; 162 configurations, 3 seeds):
+
+```bash
+python -m research.realsys --focus --lanes 2     # about 4-5 hours on 4 cores; resumable
+```
+
+Everything below applies to both the focused and the full grid.
+
 `research/realsys.py` runs 2,160 configurations. It takes about 40–45 hours on a
 4-core machine. The runner can be stopped and restarted at any time: it appends
 each finished run to `research/results/realsys.csv` and skips configurations
-already there. This branch already contains the finished runs, so a restart
-continues where it left off.
+already there. The committed `realsys.csv` contains the runs finished so far (steady state at 1-16 gateways, mostly one seed, and a few gray
+runs at 16 gateways), so a restart continues where it left off.
 
 ## 1. Setup (Linux or macOS, Python 3.10+)
 
