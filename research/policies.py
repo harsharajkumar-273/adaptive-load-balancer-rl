@@ -72,6 +72,9 @@ VARIANTS = {
     "p3c_learned_q2": ("p2c_learned", {"d": 3, "features": "q2"}),
     "p3c_learned_ewma": ("p2c_learned", {"d": 3, "features": "ewma"}),
     "linucb_ewma": ("linucb", {"features": "ewma"}),
+    "greedy_mlp": ("mlp", {"d": 0}),
+    "p2c_learned_mlp": ("mlp", {"d": 2}),
+    "p3c_learned_mlp": ("mlp", {"d": 3}),
     "greedy_rbf": ("greedy", {"features": "rbf"}),
     "linucb_rbf": ("linucb", {"features": "rbf"}),
     "p2c_learned_rbf": ("p2c_learned", {"features": "rbf"}),
@@ -82,7 +85,7 @@ VARIANTS = {
 # Model-variant ablation (own experiment, not part of the main grid).
 ABLATION_POLICIES = ["greedy_q2", "greedy_ewma", "p2c_learned_q2", "p2c_learned_ewma", "p3c_learned_q2",
                      "p3c_learned_ewma", "linucb", "linucb_ewma", "greedy_rbf", "linucb_rbf", "p2c_learned_rbf",
-                     "p3c_learned_rbf"]
+                     "p3c_learned_rbf", "greedy_mlp", "p2c_learned_mlp", "p3c_learned_mlp"]
 ALL_POLICIES = (HEURISTICS + LEARNED + PROBING + [v for v in VARIANTS if v not in ABLATION_POLICIES]
                 + [p + "+lc" for p in ["jsq", "greedy", "ts", "p2c_learned"]])
 
@@ -233,6 +236,64 @@ class Learned(Dispatcher):
         y = latency / self.latency_scale
         self.model.update(server, feature, y)
         self._ewma[server] = y if self._ewma[server] == 0.0 else 0.9 * self._ewma[server] + 0.1 * y
+
+
+class MLPLearned(Learned):
+    """
+    A small neural latency model instead of a linear one: one MLP over (one-hot server, queue length)
+    that predicts latency in latency-scale units, trained online with Adam on minibatches drawn from a
+    replay buffer of this router's own (server, queue seen, latency) samples. d=0 routes greedily to
+    the lowest predicted latency; d>=2 ranks d uniformly sampled candidates (power-of-d).
+    """
+
+    def __init__(self, n, nominal_mus, rng, latency_scale: float, np_rng: np.random.Generator, d: int = 0,
+                 hidden: int = 32, lr: float = 0.01, batch: int = 32, buffer: int = 2000, **kw):
+        Dispatcher.__init__(self, n, nominal_mus, rng, **kw)
+        self.features = "q"          # the feature handed back to observe() is the queue length seen
+        self.latency_scale, self.np_rng, self.d = latency_scale, np_rng, d
+        self.batch, self.buffer, self.lr = batch, buffer, lr
+        self.W1 = np_rng.standard_normal((n + 1, hidden)) * 0.3
+        self.b1 = np.zeros(hidden)
+        self.W2 = np_rng.standard_normal((hidden, 1)) * 0.3
+        self.b2 = np.ones(1)
+        self._m = [np.zeros_like(p) for p in (self.W1, self.b1, self.W2, self.b2)]
+        self._v = [np.zeros_like(p) for p in (self.W1, self.b1, self.W2, self.b2)]
+        self._t = 0
+        self._X = np.zeros((buffer, n + 1))
+        self._y = np.zeros(buffer)
+        self._count = 0
+
+    def _inputs(self, servers, q):
+        X = np.zeros((len(servers), self.n + 1))
+        X[np.arange(len(servers)), servers] = 1.0
+        X[:, -1] = np.asarray(q, dtype=float) / 10.0
+        return X
+
+    def _predict(self, X):
+        h = np.tanh(X @ self.W1 + self.b1)
+        return (h @ self.W2 + self.b2)[:, 0], h
+
+    def pick(self, t, q):
+        servers = list(range(self.n)) if self.d < 2 else self.rng.sample(range(self.n), min(self.d, self.n))
+        pred, _ = self._predict(self._inputs(servers, [q[s] for s in servers]))
+        return servers[self._argmin_random_tie(pred.tolist())]
+
+    def observe(self, server, latency, feature, t):
+        i = self._count % self.buffer
+        self._X[i] = self._inputs([server], [feature])[0]
+        self._y[i] = latency / self.latency_scale
+        self._count += 1
+        m = min(self._count, self.buffer)
+        idx = self.np_rng.integers(0, m, size=min(self.batch, m))
+        X, y = self._X[idx], self._y[idx]
+        pred, h = self._predict(X)
+        g = (pred - y)[:, None] * (2.0 / len(y))
+        grads = [X.T @ ((g @ self.W2.T) * (1 - h * h)), ((g @ self.W2.T) * (1 - h * h)).sum(0), h.T @ g, g.sum(0)]
+        self._t += 1
+        for k, (p, gr) in enumerate(zip((self.W1, self.b1, self.W2, self.b2), grads)):
+            self._m[k] = 0.9 * self._m[k] + 0.1 * gr
+            self._v[k] = 0.999 * self._v[k] + 0.001 * gr * gr
+            p -= self.lr * (self._m[k] / (1 - 0.9 ** self._t)) / (np.sqrt(self._v[k] / (1 - 0.999 ** self._t)) + 1e-8)
 
 
 class Greedy(Learned):
@@ -480,6 +541,7 @@ _REGISTRY = {
     "prequal": Prequal,
     "probe_d": ProbeD,
     "awf_class": AgeAwareSplit,
+    "mlp": MLPLearned,
 }
 
 

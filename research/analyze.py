@@ -537,16 +537,16 @@ def trace_section(out, df: Optional[pd.DataFrame]) -> None:
     _section(out, "Trace replay: which fixed threshold was best", "\n".join(f"- {k}: {v} cells" for k, v in counts.items()))
 
 
-MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma", "greedy_rbf"], "learned greedy"),
-                  ("linucb", ["linucb", None, "linucb_ewma", "linucb_rbf"], "LinUCB (optimistic)"),
-                  ("p2c", ["p2c_learned", "p2c_learned_q2", "p2c_learned_ewma", "p2c_learned_rbf"], "learned P2C"),
-                  ("p3c", ["p3c_learned", "p3c_learned_q2", "p3c_learned_ewma", "p3c_learned_rbf"], "learned P3C")]
+MODEL_FAMILIES = [("greedy", ["greedy", "greedy_q2", "greedy_ewma", "greedy_rbf", "greedy_mlp"], "learned greedy"),
+                  ("linucb", ["linucb", None, "linucb_ewma", "linucb_rbf", None], "LinUCB (optimistic)"),
+                  ("p2c", ["p2c_learned", "p2c_learned_q2", "p2c_learned_ewma", "p2c_learned_rbf", "p2c_learned_mlp"], "learned P2C"),
+                  ("p3c", ["p3c_learned", "p3c_learned_q2", "p3c_learned_ewma", "p3c_learned_rbf", "p3c_learned_mlp"], "learned P3C")]
 MODEL_COLORS = {"greedy": "#eb6834", "linucb": "#e87ba4", "p2c": "#008300", "p3c": "#4a3aa7"}
-MODEL_FEATURES = ["q", "q²", "q + own latency", "q, non-linear (RBF)"]
+MODEL_FEATURES = ["q", "q²", "q + own latency", "q, non-linear (RBF)", "small neural net (MLP)"]
 
 
 def models_section(out, df: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(1, 4, figsize=(16.5, 4.4), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(19.0, 4.6), sharey=True)
     cells = [("steady", 0.05), ("steady", 0.2), ("gray", 0.05), ("gray", 0.2)]
     for ax, (scen, st) in zip(axes, cells):
         frame = df[(df.scenario == scen) & (df.staleness == st) & (~df.desync)]
@@ -561,7 +561,7 @@ def models_section(out, df: pd.DataFrame) -> None:
                 xs.append(i); med.append(v.median()); lo.append(v.quantile(0.25)); hi.append(v.quantile(0.75))
             ax.plot(xs, med, color=MODEL_COLORS[fam], marker="o", linewidth=1.8, markersize=5, label=label)
             ax.fill_between(xs, lo, hi, color=MODEL_COLORS[fam], alpha=0.10, linewidth=0)
-        ax.set_xticks(range(4))
+        ax.set_xticks(range(5))
         ax.set_xticklabels(MODEL_FEATURES, fontsize=8, rotation=20, ha="right")
         ax.set_title(f"{scen}, {staleness_label(st)} staleness", color=TEXT, fontsize=10, loc="left")
         _axes_style(ax, "latency-model features", "P99 latency (ms, log)" if ax is axes[0] else "")

@@ -244,7 +244,8 @@ def _grid_agents_retries(quick: bool) -> Iterable[Job]:
 MODEL_POLICIES = ["greedy", "greedy_q2", "greedy_ewma", "linucb", "linucb_ewma", "ts",
                   "p2c_learned", "p2c_learned_q2", "p2c_learned_ewma",
                   "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma",
-                  "greedy_rbf", "linucb_rbf", "p2c_learned_rbf", "p3c_learned_rbf"]
+                  "greedy_rbf", "linucb_rbf", "p2c_learned_rbf", "p3c_learned_rbf",
+                  "greedy_mlp", "p2c_learned_mlp", "p3c_learned_mlp"]
 
 
 def _grid_models(quick: bool) -> Iterable[Job]:

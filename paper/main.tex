@@ -49,33 +49,19 @@
 \fi
 
 \begin{abstract}
-Production request routers are horizontally scaled: many router replicas
-decide independently from the same, slightly stale view of backend state, and
-they increasingly score backends with learned models. Classic queueing results
-show that shortest-queue routing on stale shared information \emph{herds}:
-every router picks the same server. We ask whether learned routers inherit this
-failure. They do, and it is worse. With 16 routers and 50\,ms-stale state,
-argmin routing on learned latency predictions has a P99 of 1.1\,s against
-0.8\,s for join-the-shortest-queue, and 12.5\,s against 3.1\,s at 200\,ms.
-We show why: any policy that is a deterministic function of the shared snapshot
-sends a whole refresh window to one server, whereas restricting each request to
-candidates drawn independently of the snapshot caps a server's burst at
-$\kappa\lambda\Delta$; measured burst shares agree with both statements.
-Richer latency models and optimistic exploration do not fix argmin herding.
-Two remedies do: learned power-of-$d$ routing, and an age-aware stochastic split
-that accounts for the arrivals a snapshot cannot yet reflect. Without any
-probing, learned power-of-$d$ keeps steady-state P99 between 108 and 282\,ms across
-28 combinations of staleness, router count and refresh phase. In LLM serving
-with prefix caches, a locality-preserving variant stays within 2$\times$ of
-the best tuned prefix-affinity threshold in all of 108 synthetic workload regimes
-with no tuning, while every fixed threshold is at least 2.5$\times$ worse in some
-regime. Replaying real Mooncake production traces confirms that no fixed threshold is safe
-(the best synthetic value is up to 8.5$\times$ off) but also shows the limit of
-our remedy: at saturation, maximal locality wins and our variant is up to 3$\times$
-from the best tuned threshold.
-With three live probes it matches an oracle that knows every server's speed
-(84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a
-gray failure (112 vs.\ 144\,ms). The study covers 56{,}050 simulated runs.\ifrealsys{} A multi-process prototype validates the simulator.\fi
+Production request routers are horizontally scaled: many replicas decide independently from the same, slightly stale view of backend
+state, and they increasingly score backends with learned models. Classic queueing results show that shortest-queue routing on stale shared
+information \emph{herds}: every router picks the same server. We show that learned routers inherit this failure and make it worse:
+with 16 routers and 50\,ms-stale state, argmin routing on learned latency predictions has a P99 of 1.1\,s against 0.8\,s for
+join-the-shortest-queue, and 12.5\,s against 3.1\,s at 200\,ms. The cause is not the learner. A burst bound explains it: any policy that
+is a deterministic function of the shared snapshot sends a whole refresh window to one server, whereas restricting each request to candidates drawn
+independently of the snapshot caps a server's burst at $\kappa\lambda\Delta$; measured burst shares agree with both statements. Richer latency models
+(quadratic, non-linear, optimistic, a small neural network) do not remove herding and can worsen it. Learned power-of-$d$ routing does remove it: without probes it
+keeps steady-state P99 between 108 and 282\,ms across 28 combinations of staleness, router count and refresh phase, and with three live probes it
+matches an oracle that knows every server's speed (84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a gray failure
+(112 vs.\ 144\,ms). In a case study of LLM serving with prefix caches, a locality-preserving variant avoids tuning an affinity threshold on synthetic
+workloads, but on replayed Mooncake traces a well-tuned large threshold beats it at saturation, which marks the limit of the remedy. All results are
+simulations of 56{,}050 runs.\ifrealsys{} A multi-process prototype validates the simulator.\fi
 \end{abstract}
 
 % ---------------------------------------------------------------------------
@@ -104,37 +90,23 @@ choices is the classic antidote~\citep{mitzenmacher2001power}. It is not known
 whether learned routers, which add a second, slower feedback loop (the model),
 behave like JSQ, better, or worse.
 
-\paragraph{This paper.} We study herding in horizontally scaled learned
-routers, in a queueing model, in an LLM-serving model with prefix caches\ifrealsys, and
-on a multi-process prototype\fi. Our contributions are:
+\paragraph{This paper.} Our claim is one sentence: \emph{acting deterministically on shared stale state herds, a learned
+router does exactly that, and the remedy is to let randomness, not the model, decide which backends are considered.} We
+support it in a queueing model, and test where it stops holding in an LLM-serving case study\ifrealsys{} and on a
+multi-process prototype\fi. Contributions:
 \begin{enumerate}
-\item \textbf{Characterisation.} Argmin routing on learned latency predictions
-  herds \emph{worse} than classic JSQ under stale shared state
-  (\cref{sec:eval-herding}). It is not fixed by desynchronising refresh phases
-  once there are many routers, and a control-plane interval, as learned
-  routers commonly use, adds staleness of its own (\cref{sec:eval-epoch}).
-\item \textbf{A burst bound.} Any policy that is a deterministic function of the
-  shared snapshot sends an entire refresh window to one server; any policy that
-  restricts each request to candidates drawn independently of the snapshot caps
-  a server's burst at $\kappa_s\lambda\Delta$ (\cref{sec:theory}). Measured
-  burst shares agree with both statements (\cref{sec:eval-burst}).
-\item \textbf{The learner is not the problem.} Richer latency models and
-  optimistic exploration do not fix argmin herding, and some make it much worse;
-  learned power-of-$d$ is insensitive to the model class (\cref{sec:eval-models}).
-\item \textbf{Remedies.} \emph{Learned power-of-$d$} (sample $d$ candidates,
-  rank them with the learned model) and an \emph{age-aware stochastic split}
-  that accounts for the arrivals the snapshot cannot yet reflect
-  (\cref{sec:design}). For LLM serving we add \emph{ring-$d$}, which draws the
-  candidates from a prefix's rendezvous-hash replicas to keep cache locality.
-\item \textbf{Evaluation.} Across the three settings the remedies are the most
-  robust routers we tested. In LLM serving, learned ring-2 stays within 2$\times$
-  of the best tuned prefix-affinity threshold in all 108 workload regimes with no
-  tuning, while every fixed threshold is at least 2.5$\times$ worse (up to
-  133$\times$) in some regime. On replayed Mooncake traces the best threshold
-  changes (large $T$ wins) and the best synthetic one ($T{=}4$) is up to
-  8.5$\times$ off, while our cost-aware ring-2 is within 1.5$\times$ in 90\% of cells but
-  up to 3$\times$ off at saturation (\cref{sec:eval-llm}). Our probing variant beats a Prequal-style
-  prober~\citep{prequal2024} at equal probe cost (\cref{sec:eval-probing}).
+\item \textbf{The failure and its cause.} Argmin routing on learned latency predictions herds \emph{worse} than JSQ under stale shared
+  state, desynchronising refresh phases does not fix it once there are many routers, and a control-plane interval adds staleness of its own
+  (\cref{sec:eval-herding,sec:eval-epoch}). Richer models, optimism and a small neural network do not remove it
+  (\cref{sec:eval-models}). A burst bound explains why: a deterministic function of the snapshot sends a whole refresh window to one
+  server, while candidates drawn independently of the snapshot cap a server's burst at $\kappa_s\lambda\Delta$
+  (\cref{sec:theory,sec:eval-burst}).
+\item \textbf{The remedy, and a comparison against probing.} Learned power-of-$d$ and an age-aware stochastic split keep tails flat across staleness,
+  router count and refresh phase (\cref{sec:design}), and learned power-of-$d$ with three probes matches an oracle and beats a Prequal-style
+  prober~\citep{prequal2024} at equal probe cost under a gray failure (\cref{sec:eval-probing}).
+\item \textbf{A case study of where it stops.} In LLM serving with prefix caches, a locality-preserving variant (ring-$d$) removes the need to tune an
+  affinity threshold on synthetic workloads, but on replayed Mooncake traces a well-tuned large threshold is better at saturation and
+  ring-$d$ is up to 3$\times$ from the best (\cref{sec:eval-llm}).
 \end{enumerate}
 
 % ---------------------------------------------------------------------------
@@ -267,6 +239,12 @@ latency model with features $[1,\text{queue},\text{cache hit}]$. A prefix thus
 lives on at most $d$ replicas and the router balances load among them.
 By \cref{prop:cap}, $\kappa_s$ is the popularity mass of the prefixes whose ring
 contains $s$.
+
+\paragraph{What deploying it costs.} Learned power-of-$d$ needs no new shared state: a router keeps its own per-backend models, updates one
+model per completed request (a closed-form two-parameter update in our implementation), and scores $d$ backends per request, $O(d)$ work. With
+probes it adds $d$ synchronous round trips per request; without probes it adds none, and its snapshot is the one the router already has. The age-aware split
+needs the number of routers and an estimate of the total arrival rate, which a control plane must supply. Ring-$d$ needs a rendezvous hash that
+every router computes identically.
 
 % ---------------------------------------------------------------------------
 \section{Evaluation}
@@ -460,6 +438,12 @@ what learning contributes from what probing contributes.
 \end{itemize}
 Learning therefore pays off when server speeds are unknown or drifting, and
 the sampling step supplies robustness to staleness.
+
+\paragraph{Where the alternatives win.} Our probing variant is not uniformly best. When server speeds are known and stable, SED(3) is as good in steady
+state (83 vs.\ 84\,ms) and better under heavy-tailed service (CV 4: 419 against 483\,ms, with Prequal at 598\,ms), presumably because a learned
+model's error grows with service-time variance. Prequal's asynchronous probes add no request latency, whereas our probes are synchronous (we charge
+0.5\,ms per request); with sub-millisecond service times that advantage could change the comparison, which our simulator does not capture. In every cell we ran,
+Prequal is behind the learned probing variant at equal probe budget, but it is our re-implementation, tuned in its favour, and not the production system.
 
 Probing policies do not scale equally. From 1 to 64 routers, Prequal's P99
 rises from 89 to 186\,ms and P3C-L-probe's from 82 to 99\,ms. P3C-L-probe
