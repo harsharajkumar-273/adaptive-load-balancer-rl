@@ -567,7 +567,7 @@ def models_section(out, df: pd.DataFrame) -> None:
         _axes_style(ax, "latency-model features", "P99 latency (ms, log)" if ax is axes[0] else "")
     h, l = axes[0].get_legend_handles_labels()
     fig.legend(h, l, frameon=False, fontsize=8, labelcolor=TEXT, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=4)
-    fig.suptitle("The conclusions do not depend on the latency model (16 routers, synchronised refresh)",
+    fig.suptitle("Power-of-d is insensitive to the latency model; argmin is not (16 routers, synchronised refresh)",
                  color=TEXT, fontsize=12, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(os.path.join(FIGURES, "fig14_models.png"), dpi=150, facecolor="white", bbox_inches="tight")

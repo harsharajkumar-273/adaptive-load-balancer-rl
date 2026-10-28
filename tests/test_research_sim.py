@@ -233,3 +233,11 @@ def test_richer_features_are_recorded_and_learned():
     assert len(x) == 3 and x[0] == 1.0 and x[1] == float([3, 0][s])
     d.observe(s, 0.05, x, 0.1)
     assert d._ewma[s] == pytest.approx(5.0)    # latency 0.05 s / scale 0.01 s
+
+
+def test_mlp_learner_runs_deterministically_and_learns():
+    from research.sim import Scenario, simulate
+    sc = Scenario(staleness=0.05, num_dispatchers=4, duration=6.0, warmup=1.0)
+    a = simulate(sc, "p2c_learned_mlp", seed=1)
+    b = simulate(sc, "p2c_learned_mlp", seed=1)
+    assert a["p99_ms"] == b["p99_ms"] and a["p99_ms"] < 1000.0

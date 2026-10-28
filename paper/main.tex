@@ -55,8 +55,8 @@ information \emph{herds}: every router picks the same server. We show that learn
 with 16 routers and 50\,ms-stale state, argmin routing on learned latency predictions has a P99 of 1.1\,s against 0.8\,s for
 join-the-shortest-queue, and 12.5\,s against 3.1\,s at 200\,ms. The cause is not the learner. A burst bound explains it: any policy that
 is a deterministic function of the shared snapshot sends a whole refresh window to one server, whereas restricting each request to candidates drawn
-independently of the snapshot caps a server's burst at $\kappa\lambda\Delta$; measured burst shares agree with both statements. Richer latency models
-(quadratic, non-linear, optimistic, a small neural network) do not remove herding and can worsen it. Learned power-of-$d$ routing does remove it: without probes it
+independently of the snapshot caps a server's burst at $\kappa\lambda\Delta$; measured burst shares agree with both statements. A richer latency model helps only in some regimes: a small neural network brings
+50\,ms-stale argmin P99 down to 0.18\,s, but it still herds with synchronised 200\,ms-stale state (22\,s median), and quadratic and optimistic variants make herding worse. Learned power-of-$d$ routing does remove it: without probes it
 keeps steady-state P99 between 108 and 282\,ms across 28 combinations of staleness, router count and refresh phase, and with three live probes it
 matches an oracle that knows every server's speed (84 vs.\ 83\,ms) and beats a Prequal-style prober at equal probe cost under a gray failure
 (112 vs.\ 144\,ms). In a case study of LLM serving with prefix caches, a locality-preserving variant avoids tuning an affinity threshold on synthetic
@@ -97,8 +97,8 @@ multi-process prototype\fi. Contributions:
 \begin{enumerate}
 \item \textbf{The failure and its cause.} Argmin routing on learned latency predictions herds \emph{worse} than JSQ under stale shared
   state, desynchronising refresh phases does not fix it once there are many routers, and a control-plane interval adds staleness of its own
-  (\cref{sec:eval-herding,sec:eval-epoch}). Richer models, optimism and a small neural network do not remove it
-  (\cref{sec:eval-models}). A burst bound explains why: a deterministic function of the snapshot sends a whole refresh window to one
+  (\cref{sec:eval-herding,sec:eval-epoch}). Richer models do not reliably remove it: a quadratic term and optimism make it worse, and a small neural network fixes mild staleness but not
+  synchronised 200\,ms-stale state (\cref{sec:eval-models}). A burst bound explains why: a deterministic function of the snapshot sends a whole refresh window to one
   server, while candidates drawn independently of the snapshot cap a server's burst at $\kappa_s\lambda\Delta$
   (\cref{sec:theory,sec:eval-burst}).
 \item \textbf{The remedy, and a comparison against probing.} Learned power-of-$d$ and an age-aware stochastic split keep tails flat across staleness,
@@ -357,7 +357,7 @@ hold only about 19 requests and sampling noise raises the busiest share.
 \label{sec:eval-models}
 A natural objection is that the learner is too simple. We repeat the
 comparison with a quadratic queue term, with the router's own smoothed latency
-for each server as a third feature, and with a non-linear radial-basis function of the queue length, and with an optimistic (LinUCB-style,
+for each server as a third feature, with a small neural network, and with a non-linear radial-basis function of the queue length, and with an optimistic (LinUCB-style,
 lower-confidence-bound) learner, at 50 and 200\,ms staleness with 16
 routers. \Cref{tab:models} summarises the steady-state results
 (\cref{fig:models} in the appendix has the full set).
@@ -376,17 +376,18 @@ queue only            & 1{,}055 & 151 / 141 & 12{,}537 & 238 / 279\\
 + queue$^2$           & 59{,}180 & 150 / 142 & 72{,}354 & 225 / 276\\
 + own latency         & 3{,}044 & 153 / 141 & 29{,}242 & 234 / 250\\
 + non-linear (RBF)    & 490 & 149 / 141 & 13{,}316 & 222 / 251\\
+small neural net      & 182 & 151 / 137 & 22{,}259 & 216 / 243\\
 LinUCB (queue)        & 13{,}568 & -- & 15{,}618 & --\\
 LinUCB (+ own lat.)& 19{,}418 & -- & 23{,}312 & --\\
 \bottomrule
 \end{tabular}
 \end{table}
 A richer model never rescues argmin routing, and the quadratic one makes it
-far worse, because its fit oscillates with the herding it causes. A non-linear fit helps argmin at 50\,ms (0.5\,s) but not at 200\,ms (13.3\,s). Optimism
-herds too (13.6\,s at 50\,ms). Power-of-$d$ ranges over 141--153\,ms at 50\,ms
-and 222--279\,ms at 200\,ms regardless of the model. This matches
+far worse, because its fit oscillates with the herding it causes. A non-linear fit helps argmin at 50\,ms (0.5\,s) but not at 200\,ms (13.3\,s). A small neural network (one hidden layer of 32 units over a one-hot server and the queue length, trained online with Adam on a replay buffer) is the best argmin learner at 50\,ms (0.18\,s) and survives unsynchronised 200\,ms state (0.37\,s, against 6.1\,s for the linear model), but with synchronised 200\,ms-stale state its median is 22\,s with an interquartile range from 0.6 to 44\,s: across seeds it sometimes herds and sometimes does not. So a better learner moves the boundary of the failure; it does not remove it. Optimism
+herds too (13.6\,s at 50\,ms). Power-of-$d$ ranges over 137--153\,ms at 50\,ms
+and 216--279\,ms at 200\,ms regardless of the model. This matches
 \cref{prop:stampede}: herding is a property of acting deterministically on
-common information, not of the learner.
+common information, which a better learner can postpone but not remove.
 
 \subsection{Control intervals are hidden staleness}
 \label{sec:eval-epoch}
@@ -691,9 +692,10 @@ intervals or not at all.
 
 \section{Limitations}
 Our backends are single-server FIFO queues; real backends are multi-core.
-Our latency models are linear, and although the quadratic, own-latency and
-optimistic variants do not change the conclusions, a deep model trained on
-rich request features might. The LLM-serving simulator models prefill
+Our default latency models are linear. Quadratic, own-latency, optimistic,
+non-linear and one small neural network do not remove herding, but the neural
+network moves its boundary (it handles 50\,ms-stale state), so a stronger model
+trained on rich request features might move it further; we did not test one. The LLM-serving simulator models prefill
 replicas only: there is no batching, no decode phase, no KV-cache memory
 pressure beyond a prefix count, and one load signal (queue length). Its
 synthetic constants (8{,}000 tokens/s, Zipf popularity) are plausible, not measured; the

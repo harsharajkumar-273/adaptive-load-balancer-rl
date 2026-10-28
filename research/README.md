@@ -29,11 +29,12 @@ Unless stated otherwise: 16 routers, queueing model, ρ = 0.9, P99 latency.
    random 0.22 (cap 0.20), P2C 0.26 (cap 0.25), learned P2C 0.25, learned P3C
    0.32 (cap 0.375); learned greedy 0.43 and Thompson 0.46 sit in between
    because per-router models disagree.
-3. **The learner is not the problem.** A quadratic queue term, the router's own
+3. **A better learner moves the failure, it does not remove it.** A quadratic queue term, the router's own
    latency history, and an optimistic (LinUCB-style) learner do not fix argmin
    herding and can make it much worse (greedy 1.1 s → 59 s with the quadratic
-   term). Power-of-d is insensitive to the model: 141–153 ms at 50 ms staleness
-   for every feature set.
+   term). A small neural network is the best argmin learner at 50 ms (0.18 s, vs. 1.06 s linear) and handles
+   unsynchronised 200 ms state (0.37 s), but with synchronised 200 ms state its median is 22 s (IQR 0.6–44 s).
+   Power-of-d is insensitive to the model: 137–153 ms at 50 ms staleness for every model.
 4. **Control intervals are hidden staleness.** Recomputing weights every 150 ms
    (as `src/agent.py` does) gives 204 ms even with live state, against 72 ms per
    request, and 800 ms at a 500 ms interval.
@@ -112,7 +113,7 @@ PYTHONPATH=. pytest -q
 
 - Single-server FIFO backends. The LLM model has no batching, no decode phase,
   and one load signal; its constants are plausible, not measured on a trace.
-- Linear latency models (the variants tested do not change the conclusions).
+- Default latency models are linear; the non-linear and one small neural variant move, but do not remove, the herding boundary. No stronger model was tested.
 - The Prequal baseline is a re-implementation from the paper's description.
 - The age-aware split needs the number of routers and an estimate of the total
   arrival rate.
