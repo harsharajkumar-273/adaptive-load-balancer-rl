@@ -1,15 +1,14 @@
-% MLSys 2027 submission.
-% FORMAT: MLSys 2027 uses the MLSys 2025 style (mlsys2025style.zip on mlsys.org).
-% Put mlsys2025.sty in this directory and the official layout is used
-% automatically; otherwise a close two-column approximation is used so the
-% draft always compiles. Re-check the 10-page limit with the official style.
-\IfFileExists{mlsys2025.sty}{\def\officialstyle{}}{}
+% USENIX ATC 2027 submission (target; the MLSys 2027 deadline was missed).
+% FORMAT: USENIX papers use usenix2019_v3.sty (usenix.org/conferences/author-resources/paper-templates).
+% Put usenix2019_v3.sty in this directory and it is used automatically; otherwise a
+% two-column approximation with the USENIX text block (7 x 9 in, 10 pt) is used so the draft always
+% compiles. Re-check the page limit with the official template and the call for papers.
+\IfFileExists{usenix2019_v3.sty}{\def\officialstyle{}}{}
+\documentclass[10pt,twocolumn,letterpaper]{article}
 \ifdefined\officialstyle
-  \documentclass{article}
-  \usepackage{mlsys2025}
+  \usepackage{usenix2019_v3}
 \else
-  \documentclass[10pt,twocolumn,letterpaper]{article}
-  \usepackage[margin=0.75in,columnsep=0.25in]{geometry}
+  \usepackage[text={7in,9in},centering,columnsep=0.33in]{geometry}
 \fi
 \usepackage{times}
 \usepackage{amsmath,amssymb,amsthm}
@@ -30,23 +29,10 @@
 % identifying repository links in the submitted version.
 
 \begin{document}
-\ifdefined\officialstyle
-  % Title block macros of the MLSys (ICML-derived) style; check against the
-  % example paper shipped in mlsys2025style.zip.
-  \twocolumn[
-    \mlsystitle{\papertitle}
-    \begin{mlsysauthorlist}
-      \mlsysauthor{Anonymous Authors}{}
-    \end{mlsysauthorlist}
-    \vskip 0.3in
-  ]
-  \printAffiliationsAndNotice{}
-\else
-  \title{\papertitle}
-  \author{Anonymous Authors}
-  \date{}
-  \maketitle
-\fi
+\title{\papertitle}
+\author{Anonymous Authors}
+\date{}
+\maketitle
 
 \begin{abstract}
 Production request routers are horizontally scaled: many replicas decide independently from the same, slightly stale view of backend
