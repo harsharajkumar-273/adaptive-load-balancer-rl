@@ -160,7 +160,8 @@ class ClusterView:
         return rif, self.per_slot_latency[s] * (rif + 1)
 
 
-def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[Dict] = None) -> Dict:
+def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[Dict] = None,
+             keep: Optional[list] = None) -> Dict:
     """Runs one simulation and returns summary metrics (post-warmup)."""
     policy_kwargs = policy_kwargs or {}
     if sc.post_failure_utilisation() >= 1.0:
@@ -260,6 +261,10 @@ def simulate(sc: Scenario, policy: str, seed: int = 0, policy_kwargs: Optional[D
     window = max(sc.staleness, BURST_BIN_SEC / 5) if sc.staleness > 0 else BURST_BIN_SEC
     row["window_share_mean"], row["window_share_p95"] = window_burst_stats(arrival_times, burst_servers, n, window)
     row["probes_per_request"] = view.probes / max(1, n_req)
+    if hasattr(dispatchers[0], "steps_total"):          # trust-gated policies: share of requests the model decided
+        row["model_step_frac"] = sum(x.steps_model for x in dispatchers) / max(1, sum(x.steps_total for x in dispatchers))
+    if keep is not None:                                 # lets callers read per-step logs off the dispatchers
+        keep.extend(dispatchers)
     return row
 
 

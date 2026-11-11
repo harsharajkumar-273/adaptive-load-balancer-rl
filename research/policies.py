@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from typing import List, Sequence, Tuple
 
 import numpy as np
@@ -73,6 +74,17 @@ VARIANTS = {
     "p3c_learned_ewma": ("p2c_learned", {"d": 3, "features": "ewma"}),
     "linucb_ewma": ("linucb", {"features": "ewma"}),
     "greedy_mlp": ("mlp", {"d": 0}),
+    "gate_off_greedy": ("gated", {"mode": "off"}),
+    "gate_greedy_p2c": ("gated", {"mode": "hard", "fallback": "p2c"}),
+    "gate_greedy_jsq": ("gated", {"mode": "hard", "fallback": "jsq"}),
+    "mix25_greedy_p2c": ("gated", {"mode": "mix", "p": 0.25, "fallback": "p2c"}),
+    "mix50_greedy_p2c": ("gated", {"mode": "mix", "p": 0.5, "fallback": "p2c"}),
+    "mix75_greedy_p2c": ("gated", {"mode": "mix", "p": 0.75, "fallback": "p2c"}),
+    "gate_off_greedy_q2": ("gated", {"mode": "off", "features": "q2"}),
+    "gate_greedy_q2_p2c": ("gated", {"mode": "hard", "fallback": "p2c", "features": "q2"}),
+    "mix50_greedy_q2_p2c": ("gated", {"mode": "mix", "p": 0.5, "fallback": "p2c", "features": "q2"}),
+    "gate_off_greedy_ewma": ("gated", {"mode": "off", "features": "ewma"}),
+    "gate_greedy_ewma_p2c": ("gated", {"mode": "hard", "fallback": "p2c", "features": "ewma"}),
     "p2c_learned_mlp": ("mlp", {"d": 2}),
     "p3c_learned_mlp": ("mlp", {"d": 3}),
     "greedy_rbf": ("greedy", {"features": "rbf"}),
@@ -86,7 +98,9 @@ VARIANTS = {
 ABLATION_POLICIES = ["greedy_q2", "greedy_ewma", "p2c_learned_q2", "p2c_learned_ewma", "p3c_learned_q2",
                      "p3c_learned_ewma", "linucb", "linucb_ewma", "greedy_rbf", "linucb_rbf", "p2c_learned_rbf",
                      "p3c_learned_rbf", "greedy_mlp", "p2c_learned_mlp", "p3c_learned_mlp"]
-ALL_POLICIES = (HEURISTICS + LEARNED + PROBING + [v for v in VARIANTS if v not in ABLATION_POLICIES]
+TRUST_POLICIES = [v for v in VARIANTS if v.startswith(("gate_", "mix"))]
+ALL_POLICIES = (HEURISTICS + LEARNED + PROBING
+                + [v for v in VARIANTS if v not in ABLATION_POLICIES and v not in TRUST_POLICIES]
                 + [p + "+lc" for p in ["jsq", "greedy", "ts", "p2c_learned"]])
 
 
@@ -370,6 +384,76 @@ class P2CLearned(Learned):
         return min(cands, key=lambda s: (self._score(s, q), self.rng.random()))
 
 
+class GatedGreedy(Learned):
+    """
+    Trust gate around learned greedy routing (the study in research/TRUST_GATE.md).
+
+    Every completed request grades two predictions of its latency *before* the model learns from it: the
+    model's prediction for the server that was used, and a baseline (that server's smoothed own latency,
+    i.e. persistence). A prediction is "ok" when |prediction - latency| <= tol * max(latency, 1) in latency-scale
+    units. The gate lets the model act only while it is ok more often than the baseline over the last `w` graded
+    steps (and starts untrusted until `min_grades` steps are graded); otherwise the router uses the safe
+    fallback (`p2c` or `jsq` on the same snapshot). Grading continues while the fallback acts, so trust can
+    return. Routing decisions are single-step, so "cancel a plan on its first mismatch" does not apply.
+
+    mode="hard": the gate above.  mode="mix": act on the model with fixed probability `p` (no grading).
+    mode="off": always act on the model (ungated), but still grade and log: the control and the replay source.
+    """
+
+    def __init__(self, *args, mode: str = "hard", fallback: str = "p2c", w: int = 50, tol: float = 0.5,
+                 p: float = 0.5, min_grades: int = 20, log_steps: bool = False, **kw):
+        super().__init__(*args, **kw)
+        if mode not in ("hard", "mix", "off") or fallback not in ("p2c", "jsq"):
+            raise ValueError("mode is hard|mix|off and fallback is p2c|jsq")
+        self.mode, self.fallback, self.w, self.tol, self.p = mode, fallback, w, tol, p
+        self.min_grades = min(min_grades, w)       # a window shorter than min_grades could otherwise never open
+        self._model_ok: deque = deque(maxlen=w)
+        self._base_ok: deque = deque(maxlen=w)
+        self.steps_total = 0
+        self.steps_model = 0
+        self.log = [] if log_steps else None       # (time, model_ok, baseline_ok, latency units, model acted)
+
+    def trusted(self) -> bool:
+        return len(self._model_ok) >= self.min_grades and sum(self._model_ok) > sum(self._base_ok)
+
+    def _fallback_pick(self, q) -> int:
+        if self.fallback == "jsq":
+            return self._argmin_random_tie(q)
+        a, b = self.rng.sample(range(self.n), 2)
+        if q[a] == q[b]:
+            return self.rng.choice((a, b))
+        return a if q[a] < q[b] else b
+
+    def choose(self, t, snapshot, version):
+        q = self.effective_queues(snapshot, version)
+        X = self._X(q)
+        pred = self.model.predict_mean(X)
+        model_s = self._argmin_random_tie(pred.tolist())
+        if self.mode == "hard":
+            use = self.trusted()
+        elif self.mode == "mix":
+            use = self.rng.random() < self.p
+        else:
+            use = True
+        s = model_s if use else self._fallback_pick(q)
+        self.steps_total += 1
+        self.steps_model += int(use)
+        feat = float(q[s]) if self.features == "q" else self._x_row(s, q)
+        return s, (feat, float(pred[s]), float(self._ewma[s]), use)
+
+    def observe(self, server, latency, feature, t):
+        feat, pred_model, pred_base, used = feature
+        y = latency / self.latency_scale
+        if pred_base > 0.0:                         # no baseline before this server has been seen
+            tol = self.tol * max(y, 1.0)
+            model_ok, base_ok = abs(pred_model - y) <= tol, abs(pred_base - y) <= tol
+            self._model_ok.append(model_ok)
+            self._base_ok.append(base_ok)
+            if self.log is not None:
+                self.log.append((t, model_ok, base_ok, y, used))
+        super().observe(server, latency, feat, t)    # the model learns only after it has been graded
+
+
 def waterfill(q: Sequence[float], mu: Sequence[float], lam: float, age: float) -> List[float]:
     """
     Randomised split that equalises expected delay once the arrivals the
@@ -542,6 +626,7 @@ _REGISTRY = {
     "probe_d": ProbeD,
     "awf_class": AgeAwareSplit,
     "mlp": MLPLearned,
+    "gated": GatedGreedy,
 }
 
 

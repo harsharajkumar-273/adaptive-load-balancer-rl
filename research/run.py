@@ -241,6 +241,22 @@ def _grid_agents_retries(quick: bool) -> Iterable[Job]:
         yield ("agents_retries", AgentScenario(load=load, retries=retries, backoff=backoff), pol, seed, {})
 
 
+GATE_POLICIES = ["greedy", "gate_greedy_p2c", "gate_greedy_jsq", "mix25_greedy_p2c", "mix50_greedy_p2c", "mix75_greedy_p2c",
+                 "greedy_q2", "gate_greedy_q2_p2c", "mix50_greedy_q2_p2c", "greedy_ewma", "gate_greedy_ewma_p2c",
+                 "p2c", "jsq", "p2c_learned"]
+
+
+def _grid_gate(quick: bool) -> Iterable[Job]:
+    """Trust-gate study (research/TRUST_GATE.md): ungated vs hard-gated vs fixed-probability mixing, paired by seed."""
+    seeds = range(2 if quick else 10)
+    for scen, st, desync, pol, seed in itertools.product(["steady", "gray"], [0.05, 0.2], [False, True],
+                                                         GATE_POLICIES, seeds):
+        yield ("gate", _scenario(scen, staleness=st, num_dispatchers=16, desync=desync), pol, seed, {})
+    if not quick:                          # gate window sensitivity (hard gate, p2c fallback)
+        for scen, st, w, seed in itertools.product(["steady", "gray"], [0.05, 0.2], [10, 25, 100, 200], seeds):
+            yield ("gate", _scenario(scen, staleness=st, num_dispatchers=16, desync=False), "gate_greedy_p2c", seed, {"w": w})
+
+
 MODEL_POLICIES = ["greedy", "greedy_q2", "greedy_ewma", "linucb", "linucb_ewma", "ts",
                   "p2c_learned", "p2c_learned_q2", "p2c_learned_ewma",
                   "p3c_learned", "p3c_learned_q2", "p3c_learned_ewma",
@@ -255,7 +271,7 @@ def _grid_models(quick: bool) -> Iterable[Job]:
         yield ("models", _scenario(scen, staleness=st, num_dispatchers=16, desync=desync), pol, seed, {})
 
 
-GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "trace": _grid_trace, "trace_cost": _grid_trace_cost, "agents": _grid_agents, "agents_surge": _grid_agents_surge,
+GRIDS = {"main": _grid_main, "models": _grid_models, "llm": _grid_llm, "llm_regimes": _grid_llm_regimes, "trace": _grid_trace, "trace_cost": _grid_trace_cost, "agents": _grid_agents, "gate": _grid_gate, "agents_surge": _grid_agents_surge,
          "agents_regimes": _grid_agents_regimes, "agents_retries": _grid_agents_retries, "agents_trace": _grid_agents_trace,
          "agents_trace_regimes": _grid_agents_trace_regimes, "robust": _grid_robust, "frontier": _grid_frontier, "probing": _grid_probing,
          "epoch": _grid_epoch, "load": _grid_load, "tuning": _grid_tuning}
